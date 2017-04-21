@@ -12,6 +12,7 @@
 #include <intrin.h>
 #include <ntifs.h>
 #include <stdarg.h>
+#include <ntstrsafe.h>
 
 EXTERN_C DRIVER_INITIALIZE DriverEntry;
 
@@ -262,23 +263,6 @@ static_assert(sizeof(SEGMENT_ATTRIBUTE) == 2,
     reinterpret_cast<void*>(0)
 
 /*!
-    @brief      Sends a message to the kernel debugger with few additional info.
-
-    @details    This macro calls the SvDebugPrint function with few additional
-                information that is useful for diagnostics.
-
-    @param[in]  Format - The format string to print.
-    @param[in]  arguments - Arguments for the format string, as in printf.
- */
-#define SV_DEBUG_PRINT(Format, ...) \
-    SvDebugPrint("#%lu %5Iu %5Iu " Format "\n", \
-                 KeGetCurrentProcessorNumberEx(nullptr), \
-                 reinterpret_cast<ULONG_PTR>(PsGetProcessId(PsGetCurrentProcess())), \
-                 reinterpret_cast<ULONG_PTR>(PsGetCurrentThreadId()), \
-                 __VA_ARGS__ \
-                 )
-
-/*!
     @brief      Sends a message to the kernel debugger.
 
     @param[in]  Format - The format string to print.
@@ -292,10 +276,31 @@ SvDebugPrint (
     ...
     )
 {
+    static const UINT32 MAX_FORMAT_LENGTH = 1024;
+    NTSTATUS status;
+    CHAR extendedFormat[MAX_FORMAT_LENGTH];
+    LPCCH finalFormat;
     va_list arglist;
 
+    status = RtlStringCchPrintfA(
+                extendedFormat,
+                RTL_NUMBER_OF(extendedFormat),
+                "[SimpleSvm] #%lu %5Iu %5Iu %s\n",
+                KeGetCurrentProcessorNumberEx(nullptr),
+                reinterpret_cast<ULONG_PTR>(PsGetProcessId(PsGetCurrentProcess())),
+                reinterpret_cast<ULONG_PTR>(PsGetCurrentThreadId()),
+                Format);
+    if (!NT_SUCCESS(status))
+    {
+        finalFormat = Format;
+        goto Exit;
+    }
+
+    finalFormat = extendedFormat;
+
+Exit:
     va_start(arglist, Format);
-    vDbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, Format, arglist);
+    vDbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, finalFormat, arglist);
     va_end(arglist);
 }
 
@@ -313,47 +318,37 @@ _IRQL_requires_same_
 _Must_inspect_result_
 static
 PVOID
-SvAllocateContiguousMemory (
+SvAllocatePageAlingedPhysicalMemory (
     _In_ SIZE_T NumberOfBytes
     )
 {
     PVOID memory;
-    //PHYSICAL_ADDRESS boundary, lowest, highest;
 
-    //boundary.QuadPart = lowest.QuadPart = 0;
-    //highest.QuadPart = -1;
+    NT_ASSERT(NumberOfBytes >= PAGE_SIZE);
 
-    //memory = MmAllocateContiguousNodeMemory(NumberOfBytes,
-    //                                        lowest,
-    //                                        highest,
-    //                                        boundary,
-    //                                        PAGE_READWRITE,
-    //                                        MM_ANY_NODE_OK);
     memory = ExAllocatePoolWithTag(NonPagedPool, NumberOfBytes, 'MVSS');
     if (memory != nullptr)
     {
+        NT_ASSERT(PAGE_ALIGN(memory) == memory);
         RtlZeroMemory(memory, NumberOfBytes);
     }
-    SV_DEBUG_PRINT("Alloc %p", memory);
     return memory;
 }
 
 /*!
-    @brief      Frees memory allocated by SvAllocateContiguousMemory.
+    @brief      Frees memory allocated by SvAllocatePageAlingedPhysicalMemory.
 
-    @param[in]  BaseAddress - The address returned by SvAllocateContiguousMemory.
+    @param[in]  BaseAddress - The address returned by SvAllocatePageAlingedPhysicalMemory.
  */
 _IRQL_requires_max_(DISPATCH_LEVEL)
 _IRQL_requires_same_
 static
 VOID
-SvFreeContiguousMemory (
+SvFreePageAlingedPhysicalMemory (
     _In_ PVOID BaseAddress
     )
 {
-    SV_DEBUG_PRINT("Free  %p", BaseAddress);
     ExFreePoolWithTag(BaseAddress, 'MVSS');
-    //MmFreeContiguousMemory(BaseAddress);
 }
 
 /*!
@@ -419,7 +414,7 @@ SvHandleCpuid (
 
     if (KeGetCurrentIrql() <= DISPATCH_LEVEL)
     {
-        SV_DEBUG_PRINT("CPUID: %08x-%08x : %08x %08x %08x %08x",
+        SvDebugPrint("CPUID: %08x-%08x : %08x %08x %08x %08x",
                                leaf,
                                subLeaf,
                                registers[0],
@@ -482,7 +477,7 @@ SvHandleVmExit (
         guestContext.VpRegs->Rax = VpData->GuestVmcb.StateSaveArea.Rsp;
         guestContext.VpRegs->Rbx = VpData->GuestVmcb.ControlArea.NRip;
         guestContext.VpRegs->Rcx = reinterpret_cast<UINT_PTR>(VpData) >> 32;
-        guestContext.VpRegs->Rdx = reinterpret_cast<UINT_PTR>(VpData) & MAXULONG32;
+        guestContext.VpRegs->Rdx = reinterpret_cast<UINT_PTR>(VpData) & MAXUINT32;
 
         __svm_vmload(MmGetPhysicalAddress(&VpData->GuestVmcb).QuadPart);
         __svm_stgi();
@@ -575,6 +570,80 @@ SvIsSimpleSvmInstalled (
     return (strcmp(vendorId, "SimpleSvm   ") == 0);
 }
 
+static
+VOID
+SvPrepareForVirtualization (
+    PVIRTUAL_PROCESSOR_DATA vpData,
+    PSHARED_VIRTUAL_PROCESSOR_DATA sharedVpData,
+    PCONTEXT Context
+    )
+{
+    DESCRIPTOR currentGdtr, currentIdtr;
+    PHYSICAL_ADDRESS guestVmcbPa, hostVmcbPa, hostStateAreaPa, pml4BasePa;
+
+    _sgdt(&currentGdtr);
+    __sidt(&currentIdtr);
+
+    guestVmcbPa = MmGetPhysicalAddress(&vpData->GuestVmcb);
+    hostVmcbPa = MmGetPhysicalAddress(&vpData->HostVmcb);
+    hostStateAreaPa = MmGetPhysicalAddress(&vpData->HostStateArea);
+    pml4BasePa = MmGetPhysicalAddress(&sharedVpData->Pml4Entries);
+
+    //
+    // Save guest state to VMCB.
+    //
+    __svm_vmsave(guestVmcbPa.QuadPart);
+
+    // EFER.SVME defaults to a reset
+    // value of zero. The effect of turning off EFER.SVME while a guest is running is undefined; therefore,
+    // the VMM should always prevent guests from writing EFER.
+
+    vpData->GuestVmcb.ControlArea.InterceptMisc1 |= SVM_INTERCEPT_MISC1_CPUID;
+    vpData->GuestVmcb.ControlArea.InterceptMisc2 |= SVM_INTERCEPT_MISC2_VMRUN;
+    vpData->GuestVmcb.ControlArea.GuestAsid = 1;
+    vpData->GuestVmcb.ControlArea.NpEnable |= SVM_NP_ENABLE_NP_ENABLE;
+    vpData->GuestVmcb.ControlArea.NCr3 = pml4BasePa.QuadPart;
+
+    vpData->GuestVmcb.StateSaveArea.GdtrBase = currentGdtr.Base;
+    vpData->GuestVmcb.StateSaveArea.GdtrLimit = currentGdtr.Limit;
+    vpData->GuestVmcb.StateSaveArea.IdtrBase = currentIdtr.Base;
+    vpData->GuestVmcb.StateSaveArea.IdtrLimit = currentIdtr.Limit;
+
+    vpData->GuestVmcb.StateSaveArea.CsLimit = GetSegmentLimit(Context->SegCs);
+    vpData->GuestVmcb.StateSaveArea.DsLimit = GetSegmentLimit(Context->SegDs);
+    vpData->GuestVmcb.StateSaveArea.EsLimit = GetSegmentLimit(Context->SegEs);
+    vpData->GuestVmcb.StateSaveArea.SsLimit = GetSegmentLimit(Context->SegSs);
+    vpData->GuestVmcb.StateSaveArea.CsSelector = Context->SegCs;
+    vpData->GuestVmcb.StateSaveArea.DsSelector = Context->SegDs;
+    vpData->GuestVmcb.StateSaveArea.EsSelector = Context->SegEs;
+    vpData->GuestVmcb.StateSaveArea.SsSelector = Context->SegSs;
+    vpData->GuestVmcb.StateSaveArea.CsAttrib = SvGetSegmentAccessRight(Context->SegCs, currentGdtr.Base);
+    vpData->GuestVmcb.StateSaveArea.DsAttrib = SvGetSegmentAccessRight(Context->SegDs, currentGdtr.Base);
+    vpData->GuestVmcb.StateSaveArea.EsAttrib = SvGetSegmentAccessRight(Context->SegEs, currentGdtr.Base);
+    vpData->GuestVmcb.StateSaveArea.SsAttrib = SvGetSegmentAccessRight(Context->SegSs, currentGdtr.Base);
+
+    vpData->GuestVmcb.StateSaveArea.Efer = __readmsr(IA32_MSR_EFER);
+    vpData->GuestVmcb.StateSaveArea.Cr0 = __readcr0();
+    vpData->GuestVmcb.StateSaveArea.Cr2 = __readcr2();
+    vpData->GuestVmcb.StateSaveArea.Cr3 = __readcr3();
+    vpData->GuestVmcb.StateSaveArea.Cr4 = __readcr4();
+    vpData->GuestVmcb.StateSaveArea.Rflags = Context->EFlags;
+    vpData->GuestVmcb.StateSaveArea.Rsp = Context->Rsp;
+    vpData->GuestVmcb.StateSaveArea.Rip = Context->Rip;
+    vpData->GuestVmcb.StateSaveArea.GPat = __readmsr(IA32_MSR_PAT);
+
+    vpData->HostStackLayout.Reserved1 = MAXUINT64;
+    vpData->HostStackLayout.SharedVpData = sharedVpData;
+    vpData->HostStackLayout.Self = vpData;
+    vpData->HostStackLayout.HostVmcbPa = hostVmcbPa.QuadPart;
+    vpData->HostStackLayout.GuestVmcbPa = guestVmcbPa.QuadPart;
+
+    __writemsr(IA32_MSR_VM_HSAVE_PA, hostStateAreaPa.QuadPart);
+
+    __svm_vmsave(vpData->HostStackLayout.HostVmcbPa);
+    __svm_clgi();
+    _enable();
+}
 /*!
     @brief      TBD.
 
@@ -597,9 +666,7 @@ SvVirtualizeProcessor (
     NTSTATUS status;
     PSHARED_VIRTUAL_PROCESSOR_DATA sharedVpData;
     PVIRTUAL_PROCESSOR_DATA vpData;
-    PHYSICAL_ADDRESS guestVmcbPa, hostVmcbPa, hostStateAreaPa, pml4BasePa;
     CONTEXT currentContext;
-    DESCRIPTOR currentGdtr, currentIdtr;
     KIRQL oldIrql;
 
     SV_DEBUG_BREAK();
@@ -616,98 +683,33 @@ SvVirtualizeProcessor (
     sharedVpData = reinterpret_cast<PSHARED_VIRTUAL_PROCESSOR_DATA>(Context);
 
     vpData = reinterpret_cast<PVIRTUAL_PROCESSOR_DATA>(
-                    SvAllocateContiguousMemory(sizeof(VIRTUAL_PROCESSOR_DATA)));
+                    SvAllocatePageAlingedPhysicalMemory(sizeof(VIRTUAL_PROCESSOR_DATA)));
     if (vpData == nullptr)
     {
-        SV_DEBUG_PRINT("Insufficient memory.");
+        SvDebugPrint("Insufficient memory.");
         status = STATUS_NO_MEMORY;
         goto Exit;
     }
 
-    guestVmcbPa = MmGetPhysicalAddress(&vpData->GuestVmcb);
-    hostVmcbPa = MmGetPhysicalAddress(&vpData->HostVmcb);
-    hostStateAreaPa = MmGetPhysicalAddress(&vpData->HostStateArea);
-    pml4BasePa = MmGetPhysicalAddress(&sharedVpData->Pml4Entries);
-
-    //
-    // Save guest state to VMCB.
-    //
     __writemsr(IA32_MSR_EFER, __readmsr(IA32_MSR_EFER) | EFER_SVME);
 
-    __svm_vmsave(guestVmcbPa.QuadPart);
-    _sgdt(&currentGdtr);
-    __sidt(&currentIdtr);
     RtlCaptureContext(&currentContext);
 
     // Is Guest mode?
-    if (SvIsSimpleSvmInstalled() != FALSE)
+    if (SvIsSimpleSvmInstalled() == FALSE)
     {
-        SV_DEBUG_PRINT("The processor has been virtualized.");
-        status = STATUS_SUCCESS;
-        goto Exit;
+        SvDebugPrint("Attempting to virtualize the processor.");
+        SvPrepareForVirtualization(vpData, sharedVpData, &currentContext);
+        SvLaunchVm(&vpData->HostStackLayout.GuestVmcbPa);
+        //
+        // Should never reach here.
+        //
+        SV_DEBUG_BREAK();
+        KeBugCheck(MANUALLY_INITIATED_CRASH);
     }
 
-    SV_DEBUG_PRINT("Attempting to virtualize the processor.");
-
-    // EFER.SVME defaults to a reset
-    // value of zero. The effect of turning off EFER.SVME while a guest is running is undefined; therefore,
-    // the VMM should always prevent guests from writing EFER.
-
-    vpData->GuestVmcb.ControlArea.InterceptMisc1 |= SVM_INTERCEPT_MISC1_CPUID;
-    vpData->GuestVmcb.ControlArea.InterceptMisc2 |= SVM_INTERCEPT_MISC2_VMRUN;
-    vpData->GuestVmcb.ControlArea.GuestAsid = 1;
-    vpData->GuestVmcb.ControlArea.NpEnable |= SVM_NP_ENABLE_NP_ENABLE;
-    vpData->GuestVmcb.ControlArea.NCr3 = pml4BasePa.QuadPart;
-
-    vpData->GuestVmcb.StateSaveArea.GdtrBase = currentGdtr.Base;
-    vpData->GuestVmcb.StateSaveArea.GdtrLimit = currentGdtr.Limit;
-    vpData->GuestVmcb.StateSaveArea.IdtrBase = currentIdtr.Base;
-    vpData->GuestVmcb.StateSaveArea.IdtrLimit = currentIdtr.Limit;
-
-    vpData->GuestVmcb.StateSaveArea.CsLimit = GetSegmentLimit(currentContext.SegCs);
-    vpData->GuestVmcb.StateSaveArea.DsLimit = GetSegmentLimit(currentContext.SegDs);
-    vpData->GuestVmcb.StateSaveArea.EsLimit = GetSegmentLimit(currentContext.SegEs);
-    vpData->GuestVmcb.StateSaveArea.SsLimit = GetSegmentLimit(currentContext.SegSs);
-    vpData->GuestVmcb.StateSaveArea.CsSelector = currentContext.SegCs;
-    vpData->GuestVmcb.StateSaveArea.DsSelector = currentContext.SegDs;
-    vpData->GuestVmcb.StateSaveArea.EsSelector = currentContext.SegEs;
-    vpData->GuestVmcb.StateSaveArea.SsSelector = currentContext.SegSs;
-    vpData->GuestVmcb.StateSaveArea.CsAttrib = SvGetSegmentAccessRight(currentContext.SegCs, currentGdtr.Base);
-    vpData->GuestVmcb.StateSaveArea.DsAttrib = SvGetSegmentAccessRight(currentContext.SegDs, currentGdtr.Base);
-    vpData->GuestVmcb.StateSaveArea.EsAttrib = SvGetSegmentAccessRight(currentContext.SegEs, currentGdtr.Base);
-    vpData->GuestVmcb.StateSaveArea.SsAttrib = SvGetSegmentAccessRight(currentContext.SegSs, currentGdtr.Base);
-
-    vpData->GuestVmcb.StateSaveArea.Efer = __readmsr(IA32_MSR_EFER);
-    vpData->GuestVmcb.StateSaveArea.Cr0 = __readcr0();
-    vpData->GuestVmcb.StateSaveArea.Cr2 = __readcr2();
-    vpData->GuestVmcb.StateSaveArea.Cr3 = __readcr3();
-    vpData->GuestVmcb.StateSaveArea.Cr4 = __readcr4();
-    vpData->GuestVmcb.StateSaveArea.Rflags = currentContext.EFlags;
-    vpData->GuestVmcb.StateSaveArea.Rsp = currentContext.Rsp;
-    vpData->GuestVmcb.StateSaveArea.Rip = currentContext.Rip;
-    vpData->GuestVmcb.StateSaveArea.GPat = __readmsr(IA32_MSR_PAT);
-
-    vpData->HostStackLayout.Reserved1 = MAXUINT64;
-    vpData->HostStackLayout.SharedVpData = sharedVpData;
-    vpData->HostStackLayout.Self = vpData;
-    vpData->HostStackLayout.HostVmcbPa = hostVmcbPa.QuadPart;
-    vpData->HostStackLayout.GuestVmcbPa = guestVmcbPa.QuadPart;
-
-    __writemsr(IA32_MSR_VM_HSAVE_PA, hostStateAreaPa.QuadPart);
-
-    __svm_vmsave(vpData->HostStackLayout.HostVmcbPa);
-    __svm_clgi();
-    _enable();
-
-    SV_DEBUG_BREAK();
-
-    SvLaunchVm(&vpData->HostStackLayout.GuestVmcbPa);
-
-    //
-    // Should never reach here.
-    //
-    NT_ASSERT(TRUE == FALSE);
-    status = STATUS_UNSUCCESSFUL;
+    SvDebugPrint("The processor has been virtualized.");
+    status = STATUS_SUCCESS;
 
 Exit:
     KeLowerIrql(oldIrql);
@@ -715,7 +717,7 @@ Exit:
     if ((!NT_SUCCESS(status)) &&
         (vpData != nullptr))
     {
-        SvFreeContiguousMemory(vpData);
+        SvFreePageAlingedPhysicalMemory(vpData);
     }
     return status;
 }
@@ -843,6 +845,7 @@ SvDevirtualizeProcessor (
     )
 {
     int registers[4];   // EAX, EBX, ECX, and EDX
+    UINT64 high, low;
     PVIRTUAL_PROCESSOR_DATA vpData;
     PSHARED_VIRTUAL_PROCESSOR_DATA *sharedVpDataPtr;
 
@@ -862,13 +865,14 @@ SvDevirtualizeProcessor (
         goto Exit;
     }
 
-    SV_DEBUG_PRINT("The processor has been de-virtualized");
+    SvDebugPrint("The processor has been de-virtualized");
 
     //
     // Get an address of per processor data indicated by ECX:EDX.
     //
-    vpData = reinterpret_cast<PVIRTUAL_PROCESSOR_DATA>(MAKEULONGLONG(registers[3],
-                                                                     registers[2]));
+    high = registers[2];
+    low = registers[3] & MAXUINT32;
+    vpData = reinterpret_cast<PVIRTUAL_PROCESSOR_DATA>(high << 32 | low);
     NT_ASSERT(vpData->HostStackLayout.Reserved1 == MAXUINT64);
 
     //
@@ -876,7 +880,7 @@ SvDevirtualizeProcessor (
     //
     sharedVpDataPtr = reinterpret_cast<PSHARED_VIRTUAL_PROCESSOR_DATA *>(Context);
     *sharedVpDataPtr = vpData->HostStackLayout.SharedVpData;
-    SvFreeContiguousMemory(vpData);
+    SvFreePageAlingedPhysicalMemory(vpData);
 
 Exit:
     return STATUS_SUCCESS;
@@ -905,7 +909,7 @@ SvDevirtualizeAllProcessors (
     SvExecuteOnEachProcessor(SvDevirtualizeProcessor, &sharedVpData, nullptr);
     if (sharedVpData != nullptr)
     {
-        SvFreeContiguousMemory(sharedVpData);
+        SvFreePageAlingedPhysicalMemory(sharedVpData);
     }
 }
 
@@ -1107,7 +1111,7 @@ SvVirtualizeAllProcessors (
     //
     if (SvIsSvmSupported() == FALSE)
     {
-        SV_DEBUG_PRINT("SVM is not fully supported on this processor.");
+        SvDebugPrint("SVM is not fully supported on this processor.");
         status = STATUS_HV_FEATURE_UNAVAILABLE;
         goto Exit;
     }
@@ -1119,10 +1123,10 @@ SvVirtualizeAllProcessors (
 
     // TODO: need not be contigunouse memory
     sharedVpData = reinterpret_cast<PSHARED_VIRTUAL_PROCESSOR_DATA>(
-            SvAllocateContiguousMemory(sizeof(SHARED_VIRTUAL_PROCESSOR_DATA)));
+            SvAllocatePageAlingedPhysicalMemory(sizeof(SHARED_VIRTUAL_PROCESSOR_DATA)));
     if (sharedVpData == nullptr)
     {
-        SV_DEBUG_PRINT("Insufficient memory.");
+        SvDebugPrint("Insufficient memory.");
         status = STATUS_NO_MEMORY;
         goto Exit;
     }
@@ -1169,7 +1173,7 @@ Exit:
             // If none of processors has not been virtualized, simply free
             // shared data.
             //
-            SvFreeContiguousMemory(sharedVpData);
+            SvFreePageAlingedPhysicalMemory(sharedVpData);
         }
     }
     return status;
@@ -1194,6 +1198,8 @@ DriverEntry (
     UNREFERENCED_PARAMETER(RegistryPath);
 
     SV_DEBUG_BREAK();
+
+    ExInitializeDriverRuntime(DrvRtPoolNxOptIn);
 
     DriverObject->DriverUnload = DriverUnload;
     return SvVirtualizeAllProcessors();
