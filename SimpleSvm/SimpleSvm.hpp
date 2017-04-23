@@ -1,7 +1,7 @@
 /*!
     @file       SimpleSvm.hpp
 
-    @brief      TBD.
+    @brief      SVM specific definitions.
 
     @author     Satoshi Tanda
 
@@ -15,7 +15,7 @@
 
 #define SVM_INTERCEPT_MISC1_CPUID (1UL << 18)
 #define SVM_INTERCEPT_MISC2_VMRUN (1UL << 0)
-
+#define SVM_INTERCEPT_MISC2_EFEF_WRITE (1UL << 15)
 #define SVM_NP_ENABLE_NP_ENABLE (1UL << 0)
 
 //
@@ -146,6 +146,9 @@ typedef struct _VMCB_STATE_SAVE_AREA
 static_assert(sizeof(VMCB_STATE_SAVE_AREA) == 0x298,
               "VMCB_STATE_SAVE_AREA Size Mismatch");
 
+//
+// An entire VMCB (Virtual machine control block) layout.
+//
 typedef struct _VMCB
 {
     VMCB_CONTROL_AREA ControlArea;
@@ -153,8 +156,7 @@ typedef struct _VMCB
     UINT8 Reserved1[0x1000 - sizeof(VMCB_CONTROL_AREA) - sizeof(VMCB_STATE_SAVE_AREA)];
 } VMCB, *PVMCB;
 static_assert(sizeof(VMCB) == 0x1000,
-              "VMCB_STATE_SAVE_AREA Size Mismatch");
-
+              "VMCB Size Mismatch");
 
 //
 // See: SVM Intercept Codes
