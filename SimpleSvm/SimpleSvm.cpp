@@ -16,7 +16,6 @@
 #include <ntstrsafe.h>
 
 EXTERN_C DRIVER_INITIALIZE DriverEntry;
-
 static DRIVER_UNLOAD SvDriverUnload;
 static CALLBACK_FUNCTION SvPowerCallbackRoutine;
 
@@ -91,7 +90,8 @@ static_assert(sizeof(PD_ENTRY_2MB) == 8,
 
 typedef struct _SHARED_VIRTUAL_PROCESSOR_DATA
 {
-    DECLSPEC_ALIGN(PAGE_SIZE) PML4_ENTRY_2MB Pml4Entries[1];    // just for 512 GB
+    PVOID MsrPermissionsMap;
+    DECLSPEC_ALIGN(PAGE_SIZE) PML4_ENTRY_2MB Pml4Entries[1];    // Just for 512 GB
     DECLSPEC_ALIGN(PAGE_SIZE) PDP_ENTRY_2MB PdpEntries[512];
     DECLSPEC_ALIGN(PAGE_SIZE) PD_ENTRY_2MB PdeEntries[512][512];
 } SHARED_VIRTUAL_PROCESSOR_DATA, *PSHARED_VIRTUAL_PROCESSOR_DATA;
@@ -226,7 +226,6 @@ static_assert(sizeof(SEGMENT_ATTRIBUTE) == 2,
 #define CPUID_PROCESSOR_AND_PROCESSOR_FEATURE_IDENTIFIERS   1
 #define CPUID_FN0000_0001_ECX_HYPERVISOR_PRESENT  (1UL << 31)
 
-#define MAKEULONGLONG(lo,hi) ((ULONGLONG)lo + ((ULONGLONG)hi << 32))
 
 //
 // http://lxr.free-electrons.com/source/arch/x86/include/uapi/asm/hyperv.h
@@ -265,7 +264,7 @@ static_assert(sizeof(SEGMENT_ATTRIBUTE) == 2,
     reinterpret_cast<void*>(0)
 
 //
-//
+// A power state callback handle.
 //
 static PVOID g_PowerCallbackRegistration;
 
@@ -400,6 +399,88 @@ SvFreePageAlingedPhysicalMemory (
 
     @param[in]  TBD - TBD.
  */
+__drv_allocatesMem(Mem)
+_Post_writable_byte_size_(NumberOfBytes)
+_Post_maybenull_
+_IRQL_requires_max_(DISPATCH_LEVEL)
+_IRQL_requires_same_
+_Must_inspect_result_
+static
+PVOID
+SvAllocateContiguousMemory (
+    _In_ SIZE_T NumberOfBytes
+    )
+{
+    PVOID memory;
+    PHYSICAL_ADDRESS boundary, lowest, highest;
+
+    boundary.QuadPart = lowest.QuadPart = 0;
+    highest.QuadPart = -1;
+
+    //MmAllocateContiguousNodeMemory
+    memory = MmAllocateContiguousMemorySpecifyCacheNode(NumberOfBytes,
+                                                        lowest,
+                                                        highest,
+                                                        boundary,
+                                                        MmCached,
+                                                        MM_ANY_NODE_OK);
+    if (memory != nullptr)
+    {
+        RtlZeroMemory(memory, NumberOfBytes);
+    }
+    return memory;
+}
+
+/*!
+    @brief      TBD.
+
+    @details    TBD.
+
+    @param[in]  TBD - TBD.
+ */
+_IRQL_requires_max_(DISPATCH_LEVEL)
+_IRQL_requires_same_
+static
+VOID
+SvFreeContiguousMemory (
+    _In_ PVOID BaseAddress
+    )
+{
+    MmFreeContiguousMemory(BaseAddress);
+}
+
+/*!
+    @brief      Injects #GP with 0 of error code.
+
+    @details    TBD.
+
+    @param[in]  TBD - TBD.
+ */
+_IRQL_requires_same_
+static
+VOID
+SvInjectGeneralProtectionException (
+    _In_ PVIRTUAL_PROCESSOR_DATA VpData
+    )
+{
+    EVENTINJ event;
+
+    event.AsUInt64 = 0;
+    event.Fields.Vector = 13; // #GP
+    event.Fields.Type = 3;    // Exception
+    event.Fields.ErrorCodeValid = 1;
+    event.Fields.Valid = 1;
+
+    VpData->GuestVmcb.ControlArea.EventInj = event.AsUInt64;
+}
+
+/*!
+    @brief      TBD.
+
+    @details    TBD.
+
+    @param[in]  TBD - TBD.
+ */
 _IRQL_requires_same_
 static
 VOID
@@ -409,8 +490,7 @@ SvHandleCpuid (
     )
 {
     int registers[4];   // EAX, EBX, ECX, and EDX
-    int leaf;
-    int subLeaf;
+    int leaf, subLeaf;
     SEGMENT_ATTRIBUTE attribute;
 
     UNREFERENCED_PARAMETER(VpData);
@@ -473,6 +553,61 @@ SvHandleCpuid (
 
     @details    TBD.
 
+    @param[in]  TBD - TBD.
+ */
+_IRQL_requires_same_
+static
+VOID
+SvHandleMsrAccess (
+    _In_ PVIRTUAL_PROCESSOR_DATA VpData,
+    _In_ PGUEST_CONTEXT GuestContext
+    )
+{
+    UINT64 writeValueLow, writeValueHi, writeValue;
+
+    NT_ASSERT(GuestContext->VpRegs->Rcx == IA32_MSR_EFER);
+    NT_ASSERT(VpData->GuestVmcb.ControlArea.ExitInfo1 != 0);
+
+    writeValueLow = GuestContext->VpRegs->Rax & MAXUINT32;
+    if ((writeValueLow & EFER_SVME) == 0)
+    {
+        SvInjectGeneralProtectionException(VpData);
+    }
+    else
+    {
+        writeValueHi = GuestContext->VpRegs->Rdx & MAXUINT32;
+        writeValue = writeValueHi << 32 | writeValueLow;
+        VpData->GuestVmcb.StateSaveArea.Efer = writeValue;
+
+        VpData->GuestVmcb.StateSaveArea.Rip = VpData->GuestVmcb.ControlArea.NRip;
+    }
+}
+
+/*!
+    @brief      TBD.
+
+    @details    TBD.
+
+    @param[in]  TBD - TBD.
+ */
+_IRQL_requires_same_
+static
+VOID
+SvHandleVmrun (
+    _In_ PVIRTUAL_PROCESSOR_DATA VpData,
+    _In_ PGUEST_CONTEXT GuestContext
+    )
+{
+    UNREFERENCED_PARAMETER(GuestContext);
+
+    SvInjectGeneralProtectionException(VpData);
+}
+
+/*!
+    @brief      TBD.
+
+    @details    TBD.
+
     @param[in]  VpData - TBD.
     @param[in]  GuestRegisters - TBD.
 
@@ -495,6 +630,7 @@ SvHandleVmExit (
     //
     // Set global interrupt flag (GIF)
     //
+    // FIXME / TODO
     _disable();
     __svm_stgi();
 
@@ -522,8 +658,12 @@ SvHandleVmExit (
     case VMEXIT_CPUID:
         SvHandleCpuid(VpData, &guestContext);
         break;
-    case VMEXIT_EFER_WRITE_TRAP:
+    case VMEXIT_MSR:
+        SvHandleMsrAccess(VpData, &guestContext);
+        break;
     case VMEXIT_VMRUN:
+        SvHandleVmrun(VpData, &guestContext);
+        break;
     default:
         SV_DEBUG_BREAK();
         KeBugCheck(MANUALLY_INITIATED_CRASH);
@@ -553,21 +693,22 @@ SvHandleVmExit (
         __svm_vmload(MmGetPhysicalAddress(&VpData->GuestVmcb).QuadPart);
 
         //
-        // Set the global interrupt flag (GIF) and enable interrupt.
+        // Set the global interrupt flag (GIF) but still disable interrupts by
+        // clearing IF. GIF must be set to return to the normal execution, but
+        // interruptions are not desirable until SVM is disabled as it would
+        // execute random kernel-code in the host context.
         //
         _disable();
         __svm_stgi();
 
         //
-        // Disable SVM
+        // Disable SVM, and restore the guest RFLAGS. This may enable interrupts.
+        // Some of arithmetic flags are destroyed by the subsequent code.
         //
         __writemsr(IA32_MSR_EFER, __readmsr(IA32_MSR_EFER) & ~EFER_SVME);
         __writeeflags(VpData->GuestVmcb.StateSaveArea.Rflags);
         goto Exit;
     }
-
-    // TODO
-    NT_ASSERT((VpData->GuestVmcb.StateSaveArea.Efer & EFER_SVME) != 0);
 
     //
     // Reflect potentially updated guest's RAX to VMCB. Again, unlike other GPRs,
@@ -703,7 +844,7 @@ SvPrepareForVirtualization (
     )
 {
     DESCRIPTOR gdtr, idtr;
-    PHYSICAL_ADDRESS guestVmcbPa, hostVmcbPa, hostStateAreaPa, pml4BasePa;
+    PHYSICAL_ADDRESS guestVmcbPa, hostVmcbPa, hostStateAreaPa, pml4BasePa, msrpmPa;
 
     //
     // Capture the current GDTR and IDTR to use as initial values of the guest
@@ -716,11 +857,7 @@ SvPrepareForVirtualization (
     hostVmcbPa = MmGetPhysicalAddress(&VpData->HostVmcb);
     hostStateAreaPa = MmGetPhysicalAddress(&VpData->HostStateArea);
     pml4BasePa = MmGetPhysicalAddress(&SharedVpData->Pml4Entries);
-
-    // TODO:
-    // EFER.SVME defaults to a reset
-    // value of zero. The effect of turning off EFER.SVME while a guest is running is undefined; therefore,
-    // the VMM should always prevent guests from writing EFER.
+    msrpmPa = MmGetPhysicalAddress(SharedVpData->MsrPermissionsMap);
 
     //
     // Configure to trigger #VMEXIT with CPUID and VMRUN instructions. CPUID is
@@ -730,9 +867,15 @@ SvPrepareForVirtualization (
     // occurs due to VMEXIT_INVALID when a processor attempts to enter the guest
     // mode.
     //
-    VpData->GuestVmcb.ControlArea.InterceptMisc1 = SVM_INTERCEPT_MISC1_CPUID;
-    VpData->GuestVmcb.ControlArea.InterceptMisc2 = SVM_INTERCEPT_MISC2_VMRUN |
-                                                   SVM_INTERCEPT_MISC2_EFEF_WRITE;
+    VpData->GuestVmcb.ControlArea.InterceptMisc1 |= SVM_INTERCEPT_MISC1_CPUID;
+    VpData->GuestVmcb.ControlArea.InterceptMisc2 |= SVM_INTERCEPT_MISC2_VMRUN;
+
+    //
+    // Also, configure to trigger #VMEXIT on MSR access as configured by the
+    // MSRPM. In our case, write to IA32_MSR_EFER is intercepted.
+    //
+    VpData->GuestVmcb.ControlArea.InterceptMisc1 |= SVM_INTERCEPT_MISC1_MSR_PROT;
+    VpData->GuestVmcb.ControlArea.MsrpmBasePa = msrpmPa.QuadPart;
 
     //
     // Specify guest's address space ID (ASID). TLB is maintained by the ID for
@@ -752,7 +895,7 @@ SvPrepareForVirtualization (
     //
     // We have already build the nested page tables with SvBuildNestedPageTables.
     //
-    VpData->GuestVmcb.ControlArea.NpEnable = SVM_NP_ENABLE_NP_ENABLE;
+    VpData->GuestVmcb.ControlArea.NpEnable |= SVM_NP_ENABLE_NP_ENABLE;
     VpData->GuestVmcb.ControlArea.NCr3 = pml4BasePa.QuadPart;
 
     //
@@ -851,11 +994,9 @@ SvVirtualizeProcessor (
     PSHARED_VIRTUAL_PROCESSOR_DATA sharedVpData;
     PVIRTUAL_PROCESSOR_DATA vpData;
     CONTEXT contextRecord;
-    //KIRQL oldIrql;
 
     SV_DEBUG_BREAK();
 
-    //oldIrql = KeRaiseIrqlToDpcLevel();
     vpData = nullptr;
 
     if (!ARGUMENT_PRESENT(Context))
@@ -916,22 +1057,40 @@ SvVirtualizeProcessor (
         //
         // This function should never return to here.
         //
-        //__svm_clgi();
-        //_enable();
         SvLaunchVm(&vpData->HostStackLayout.GuestVmcbPa);
         SV_DEBUG_BREAK();
         KeBugCheck(MANUALLY_INITIATED_CRASH);
+    }
+
+    SV_DEBUG_BREAK();
+    PEXCEPTION_POINTERS x;
+    __try
+    {
+        __writemsr(IA32_MSR_EFER,  __readmsr(IA32_MSR_EFER) & ~EFER_SVME);
+        SV_DEBUG_BREAK();
+    }
+    __except(x = GetExceptionInformation(), 1)
+    {
+        SvDebugPrint("exp %p\n", GetExceptionCode());
+        SV_DEBUG_BREAK();
+    }
+    SvDebugPrint("MSR %p\n", __readmsr(IA32_MSR_EFER));
+
+    __try
+    {
+        __svm_vmrun(vpData->HostStackLayout.GuestVmcbPa);
+        SV_DEBUG_BREAK();
+    }
+    __except(x = GetExceptionInformation(), 1)
+    {
+        SvDebugPrint("exp %p\n", GetExceptionCode());
+        SV_DEBUG_BREAK();
     }
 
     SvDebugPrint("The processor has been virtualized.\n");
     status = STATUS_SUCCESS;
 
 Exit:
-    //
-    // Restores IRQL.
-    //
-    //KeLowerIrql(oldIrql);
-
     if ((!NT_SUCCESS(status)) &&
         (vpData != nullptr))
     {
@@ -976,10 +1135,9 @@ SvExecuteOnEachProcessor (
     )
 {
     NTSTATUS status;
-    ULONG numOfProcessors;
+    ULONG i, numOfProcessors;
     PROCESSOR_NUMBER processorNumber;
     GROUP_AFFINITY affinity, oldAffinity;
-    ULONG i;
 
     status = STATUS_SUCCESS;
 
@@ -1134,8 +1292,67 @@ SvDevirtualizeAllProcessors (
     SvExecuteOnEachProcessor(SvDevirtualizeProcessor, &sharedVpData, nullptr);
     if (sharedVpData != nullptr)
     {
+        SvFreeContiguousMemory(sharedVpData->MsrPermissionsMap);
         SvFreePageAlingedPhysicalMemory(sharedVpData);
     }
+}
+
+/*!
+    @brief          Build the MSR permissions map (MSRPM).
+
+    @details        This function sets up MSRPM to intercept to IA32_MSR_EFER,
+                    as suggested in "Extended Feature Enable Register (EFER)"
+                    ----
+                    Secure Virtual Machine Enable (SVME) Bit
+                    Bit 12, read/write. Enables the SVM extensions. (...) The
+                    effect of turning off EFER.SVME while a guest is running is
+                    undefined; therefore, the VMM should always prevent guests
+                    from writing EFER.
+                    ----
+
+                    Each MSR is controlled by two bits in the MSRPM. The LSB of
+                    the two bits controls read access to the MSR and the MSB
+                    controls write access. A value of 1 indicates that the
+                    operation is intercepted. This function locates an offset for
+                    IA32_MSR_EFER and sets the MSB bit. For details of logic, see
+                    "MSR Intercepts".
+
+    @param[inout]   MsrPermissionsMap - The MSRPM to set up.
+ */
+_IRQL_requires_same_
+static
+VOID
+SvBuildMsrPermissionsMap (
+    _Inout_ PVOID MsrPermissionsMap
+    )
+{
+    static const UINT32 BITS_PER_MSR = 2;
+    static const UINT32 SECOND_MSR_RANGE_BASE = 0xc0000000;
+    static const UINT32 SECOND_MSRPM_OFFSET = 0x800 * CHAR_BIT;
+    RTL_BITMAP bitmapHeader;
+    ULONG offsetFrom2ndBase, offset;
+
+    //
+    // Setup and clear all bits, indicating no MSR access should be intercepted.
+    //
+    RtlInitializeBitMap(&bitmapHeader,
+                        reinterpret_cast<PULONG>(MsrPermissionsMap),
+                        SVM_MSR_PERMISSIONS_MAP_SIZE * CHAR_BIT
+                        );
+    RtlClearAllBits(&bitmapHeader);
+
+    //
+    // Compute an offset from the second MSR permissions map offset (0x800) for
+    // IA32_MSR_EFER in bits. Then, add an offset until the second MSR
+    // permissions map.
+    //
+    offsetFrom2ndBase = (IA32_MSR_EFER - SECOND_MSR_RANGE_BASE) * BITS_PER_MSR;
+    offset = SECOND_MSRPM_OFFSET + offsetFrom2ndBase;
+
+    //
+    // Set the MSB bit indicating write accesses to the MSR should be intercepted.
+    //
+    RtlSetBits(&bitmapHeader, offset + 1, 1);
 }
 
 /*!
@@ -1354,9 +1571,22 @@ SvVirtualizeAllProcessors (
     }
 
     //
-    // Build page tables for Nested Page Table.
+    // Allocate MSR permissions map (MSRPM) onto contiguous physical memory.
+    //
+    sharedVpData->MsrPermissionsMap = SvAllocateContiguousMemory(
+                                                    SVM_MSR_PERMISSIONS_MAP_SIZE);
+    if (sharedVpData->MsrPermissionsMap == nullptr)
+    {
+        SvDebugPrint("Insufficient memory.\n");
+        status = STATUS_NO_MEMORY;
+        goto Exit;
+    }
+
+    //
+    // Build nested page table and MSRPM.
     //
     SvBuildNestedPageTables(sharedVpData);
+    SvBuildMsrPermissionsMap(sharedVpData->MsrPermissionsMap);
 
     //
     // Execute SvVirtualizeProcessor on and virtualize each processor one-by-one.
@@ -1375,8 +1605,7 @@ SvVirtualizeAllProcessors (
                                       &numOfProcessorsCompleted);
 
 Exit:
-    if ((!NT_SUCCESS(status)) &&
-        (sharedVpData != nullptr))
+    if (!NT_SUCCESS(status))
     {
         //
         // On failure, after successful allocation of shared data.
@@ -1387,6 +1616,7 @@ Exit:
             // If one or more processors have already been virtualized,
             // de-virtualize any of those processors, and free shared data.
             //
+            NT_ASSERT(sharedVpData != nullptr);
             SvDevirtualizeAllProcessors();
         }
         else
@@ -1395,7 +1625,14 @@ Exit:
             // If none of processors has not been virtualized, simply free
             // shared data.
             //
-            SvFreePageAlingedPhysicalMemory(sharedVpData);
+            if (sharedVpData != nullptr)
+            {
+                if (sharedVpData->MsrPermissionsMap != nullptr)
+                {
+                    SvFreeContiguousMemory(sharedVpData->MsrPermissionsMap);
+                }
+                SvFreePageAlingedPhysicalMemory(sharedVpData);
+            }
         }
     }
     return status;

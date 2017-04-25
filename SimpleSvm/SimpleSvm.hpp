@@ -13,13 +13,15 @@
 
 #include <basetsd.h>
 
-#define SVM_INTERCEPT_MISC1_CPUID (1UL << 18)
-#define SVM_INTERCEPT_MISC2_VMRUN (1UL << 0)
-#define SVM_INTERCEPT_MISC2_EFEF_WRITE (1UL << 15)
-#define SVM_NP_ENABLE_NP_ENABLE (1UL << 0)
+#define SVM_MSR_PERMISSIONS_MAP_SIZE    PAGE_SIZE * 2
+
+#define SVM_INTERCEPT_MISC1_CPUID       (1UL << 18)
+#define SVM_INTERCEPT_MISC1_MSR_PROT    (1UL << 28)
+#define SVM_INTERCEPT_MISC2_VMRUN       (1UL << 0)
+#define SVM_NP_ENABLE_NP_ENABLE         (1UL << 0)
 
 //
-// See: VMCB Layout, Control Area
+// See "VMCB Layout, Control Area"
 //
 typedef struct _VMCB_CONTROL_AREA
 {
@@ -66,7 +68,7 @@ static_assert(sizeof(VMCB_CONTROL_AREA) == 0x400,
               "VMCB_CONTROL_AREA Size Mismatch");
 
 //
-// See: VMCB Layout, State Save Area
+// See "VMCB Layout, State Save Area"
 //
 typedef struct _VMCB_STATE_SAVE_AREA
 {
@@ -159,7 +161,29 @@ static_assert(sizeof(VMCB) == 0x1000,
               "VMCB Size Mismatch");
 
 //
-// See: SVM Intercept Codes
+// See "Event Injection"
+//
+typedef struct _EVENTINJ
+{
+    union
+    {
+        UINT64 AsUInt64;
+        struct
+        {
+            UINT64 Vector : 8;          // [0:7]
+            UINT64 Type : 3;            // [8:10]
+            UINT64 ErrorCodeValid : 1;  // [11]
+            UINT64 Reserved1 : 19;      // [12:30]
+            UINT64 Valid : 1;           // [31]
+            UINT64 ErrorCode : 32;      // [32:63]
+        } Fields;
+    };
+} EVENTINJ, *PEVENTINJ;
+static_assert(sizeof(EVENTINJ) == 8,
+              "EVENTINJ Size Mismatch");
+
+//
+// See "SVM Intercept Codes"
 //
 #define VMEXIT_CR0_READ             0x0000
 #define VMEXIT_CR1_READ             0x0001
