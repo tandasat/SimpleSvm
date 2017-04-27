@@ -12,13 +12,16 @@ SimpleSvm is inspired by SimpleVisor, an Intel x64/EM64T VT-x specific hyperviso
 for Windows, written by Alex Ionescu (@aionescu).
 
 
-Supported Platform(s)
+Supported Platforms
 ----------------------
 - Windows 10 x64 and Windows 7 x64
 - AMD Processors with SVM and NPT support
 
 
-Related Project(s)
+Resources
 -------------------
+- AMD64 Architecture Programmer’s Manual Volume 2 and 3
+ - http://developer.amd.com/resources/developer-guides-manuals/
+ 
 - SimpleVisor
  - http://ionescu007.github.io/SimpleVisor/
