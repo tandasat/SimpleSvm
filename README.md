@@ -21,7 +21,7 @@ Supported Platforms
 Resources
 -------------------
 - AMD64 Architecture Programmer’s Manual Volume 2 and 3
- - http://developer.amd.com/resources/developer-guides-manuals/
+  - http://developer.amd.com/resources/developer-guides-manuals/
  
 - SimpleVisor
- - http://ionescu007.github.io/SimpleVisor/
+  - http://ionescu007.github.io/SimpleVisor/
