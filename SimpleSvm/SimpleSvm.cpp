@@ -13,7 +13,6 @@
 #include <intrin.h>
 #include <ntifs.h>
 #include <stdarg.h>
-#include <ntstrsafe.h>
 
 EXTERN_C DRIVER_INITIALIZE DriverEntry;
 static DRIVER_UNLOAD SvDriverUnload;
@@ -210,38 +209,28 @@ typedef struct _SEGMENT_ATTRIBUTE
 static_assert(sizeof(SEGMENT_ATTRIBUTE) == 2,
               "SEGMENT_ATTRIBUTE Size Mismatch");
 
-#define IA32_MSR_VM_CR 0xc0010114   // See: VM_CR MSR (C001_0114h)
-#define IA32_MSR_EFER 0xc0000080
-#define IA32_MSR_VM_HSAVE_PA 0xc0010117
-#define IA32_MSR_PAT 0x00000277
+#define IA32_MSR_PAT            0x00000277
+#define IA32_MSR_EFER           0xc0000080
+#define IA32_MSR_VM_CR          0xc0010114   // See: VM_CR MSR (C001_0114h)
+#define IA32_MSR_VM_HSAVE_PA    0xc0010117
 
-#define VM_CR_SVMDIS (1UL << 4)
-#define EFER_SVME (1UL << 12)  // See: Extended Feature Enable Register (EFER)
-#define CPUID_FN8000_0001_ECX_SVM   (1ul << 2)  // See: CPUID Fn8000_0001_ECX Feature Identifiers
-#define CPUID_FN8000_000A_EDX_NP    (1ul << 0)  // See: CPUID Fn8000_000A_EDX SVM Feature Identification
-#define CPUID_FN8000_000A_EDX_DECODE_ASSISTS    (1ul << 7)
+#define VM_CR_SVMDIS    (1UL << 4)
+#define EFER_SVME       (1UL << 12)  // See: Extended Feature Enable Register (EFER)
 
-// See: Function 0h—Maximum Standard Function Number and Vendor String
-#define CPUID_MAX_STANDARD_FN_NUMBER_AND_VENDOR_STRING      0
-#define CPUID_PROCESSOR_AND_PROCESSOR_FEATURE_IDENTIFIERS   1
-#define CPUID_FN0000_0001_ECX_HYPERVISOR_PRESENT  (1UL << 31)
+#define CPUID_FN8000_0001_ECX_SVM                   (1ul << 2)  // See: CPUID Fn8000_0001_ECX Feature Identifiers
+#define CPUID_FN8000_000A_EDX_NP                    (1ul << 0)  // See: CPUID Fn8000_000A_EDX SVM Feature Identification
+#define CPUID_FN8000_000A_EDX_DECODE_ASSISTS        (1ul << 7)
+#define CPUID_FN0000_0001_ECX_HYPERVISOR_PRESENT    (1UL << 31)
 
-
-//
-// http://lxr.free-electrons.com/source/arch/x86/include/uapi/asm/hyperv.h
-//
-#define HYPERV_CPUID_VENDOR_AND_MAX_FUNCTIONS   0x40000000
-#define HYPERV_CPUID_INTERFACE                  0x40000001
-#define HYPERV_CPUID_MAX                        HYPERV_CPUID_INTERFACE
-
-#define HYPERV_HYPERVISOR_PRESENT_BIT           0x80000000
-#define HYPERV_CPUID_MIN                        0x40000005
+#define CPUID_MAX_STANDARD_FN_NUMBER_AND_VENDOR_STRING      0x00000000   // See: Function 0h—Maximum Standard Function Number and Vendor String
+#define CPUID_PROCESSOR_AND_PROCESSOR_FEATURE_IDENTIFIERS   0x00000001
+#define CPUID_HV_VENDOR_AND_MAX_FUNCTIONS                   0x40000000
+#define CPUID_HV_INTERFACE                                  0x40000001
+#define CPUID_HV_MAX                                        CPUID_HV_INTERFACE
+#define CPUID_UNLOAD_SIMPLE_SVM                             0x41414141
 
 #define RPL_MASK                3
 #define DPL_SYSTEM              0
-
-#define SV_CPUID_UNLOAD_SIMPLESVM               0x41414141
-
 
 /*!
     @brief      Breaks into a kernel debugger when it is present.
@@ -283,42 +272,10 @@ SvDebugPrint (
     ...
     )
 {
-    static const UINT32 MAX_FORMAT_LENGTH = 1024;
-    CHAR extendedFormat[MAX_FORMAT_LENGTH];
-    NTSTATUS status;
-    PCCH finalFormat;
     va_list argList;
 
-    //
-    // Build a new format string that consists of the current processor number,
-    // PID, TID and an user specified format string.
-    //
-    status = RtlStringCchPrintfA(
-                extendedFormat,
-                RTL_NUMBER_OF(extendedFormat),
-                "[SimpleSvm] #%lu %5Iu %5Iu %s",
-                KeGetCurrentProcessorNumberEx(nullptr),
-                reinterpret_cast<ULONG_PTR>(PsGetProcessId(PsGetCurrentProcess())),
-                reinterpret_cast<ULONG_PTR>(PsGetCurrentThreadId()),
-                Format);
-    if (!NT_SUCCESS(status))
-    {
-        //
-        // On failure, just use the user specified format string instead.
-        //
-        finalFormat = Format;
-        goto Exit;
-    }
-
-    //
-    // Format a string with the new format string and send it to a kernel
-    // debugger.
-    //
-    finalFormat = extendedFormat;
-
-Exit:
     va_start(argList, Format);
-    vDbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, finalFormat, argList);
+    vDbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, Format, argList);
     va_end(argList);
 }
 
@@ -357,7 +314,7 @@ SvAllocatePageAlingedPhysicalMemory (
     NT_ASSERT(NumberOfBytes >= PAGE_SIZE);
 
     //
-    // Suppress the below prefast FP due to use of POOL_NX_OPTIN.
+    // Suppress the below prefast warning due to use of POOL_NX_OPTIN.
     //
     // The current function is permitted to run at an IRQ level above the
     // maximum permitted for 'ExAllocatePoolWithTag' (1). Prior function calls
@@ -393,11 +350,17 @@ SvFreePageAlingedPhysicalMemory (
 }
 
 /*!
-    @brief      TBD.
+    @brief      Allocates page aligned, zero filled contiguous physical memory.
 
-    @details    TBD.
+    @details    This function allocates page aligned nonpaged pool where backed
+                by contiguous physical pages. The allocated memory is zero
+                filled and must be freed with SvFreeContiguousMemory. The
+                allocated memory is executable.
 
-    @param[in]  TBD - TBD.
+    @param[in]  NumberOfBytes - A size of memory to allocate in byte.
+
+    @result     A pointer to the allocated memory filled with zero; or NULL when
+                there is insufficient memory to allocate requested size.
  */
 __drv_allocatesMem(Mem)
 _Post_writable_byte_size_(NumberOfBytes)
@@ -417,7 +380,17 @@ SvAllocateContiguousMemory (
     boundary.QuadPart = lowest.QuadPart = 0;
     highest.QuadPart = -1;
 
-    //MmAllocateContiguousNodeMemory
+    //
+    // Suppress the below prefast warning since there is no alternative API for
+    // Windows 7.
+    //
+    // warning C30030: Warning: MEMORY_CACHING_TYPE MmCached was used. This
+    // results in executable memory. If cached and/or executable memory is
+    // required then you can ignore this. Alternate API is
+    // MmAllocateContiguousNodeMemory - please review examples in MSDN for
+    // errors in the range 30029-30035
+    //
+#pragma prefast(disable : 30030)
     memory = MmAllocateContiguousMemorySpecifyCacheNode(NumberOfBytes,
                                                         lowest,
                                                         highest,
@@ -432,11 +405,9 @@ SvAllocateContiguousMemory (
 }
 
 /*!
-    @brief      TBD.
+    @brief      Frees memory allocated by SvAllocateContiguousMemory.
 
-    @details    TBD.
-
-    @param[in]  TBD - TBD.
+    @param[in]  BaseAddress - The address returned by SvAllocateContiguousMemory.
  */
 _IRQL_requires_max_(DISPATCH_LEVEL)
 _IRQL_requires_same_
@@ -450,74 +421,101 @@ SvFreeContiguousMemory (
 }
 
 /*!
-    @brief      Injects #GP with 0 of error code.
+    @brief          Injects #GP with 0 of error code.
 
-    @details    TBD.
-
-    @param[in]  TBD - TBD.
+    @param[inout]   VpData - Per processor data.
  */
 _IRQL_requires_same_
 static
 VOID
 SvInjectGeneralProtectionException (
-    _In_ PVIRTUAL_PROCESSOR_DATA VpData
+    _Inout_ PVIRTUAL_PROCESSOR_DATA VpData
     )
 {
     EVENTINJ event;
 
+    //
+    // Inject #GP(vector = 13, type = 3 = exception) with a valid error code.
+    // An error code are always zero. See "#GP—General-Protection Exception
+    // (Vector 13)" for details about the error code.
+    //
     event.AsUInt64 = 0;
-    event.Fields.Vector = 13; // #GP
-    event.Fields.Type = 3;    // Exception
+    event.Fields.Vector = 13;
+    event.Fields.Type = 3;
     event.Fields.ErrorCodeValid = 1;
     event.Fields.Valid = 1;
-
     VpData->GuestVmcb.ControlArea.EventInj = event.AsUInt64;
 }
 
 /*!
-    @brief      TBD.
+    @brief          Handles #VMEXIT due to execution of the CPUID instructions.
 
-    @details    TBD.
+    @details        This function returns unmodified results of the CPUID
+                    instruction, except for few cases to indicate presence of
+                    the hypervisor, and to process an unload request.
 
-    @param[in]  TBD - TBD.
+                    CPUID leaf 0x40000000 and 0x40000001 return modified values
+                    to conform to the hypervisor interface to some extent. See
+                    "Requirements for implementing the Microsoft Hypervisor interface"
+                    https://msdn.microsoft.com/en-us/library/windows/hardware/Dn613994(v=vs.85).aspx
+                    for details of the interface.
+
+    @param[inout]   VpData - Per processor data.
+    @param[inout]   GuestRegisters - Guest's GPRs.
  */
 _IRQL_requires_same_
 static
 VOID
 SvHandleCpuid (
-    _In_ PVIRTUAL_PROCESSOR_DATA VpData,
-    _In_ PGUEST_CONTEXT GuestContext
+    _Inout_ PVIRTUAL_PROCESSOR_DATA VpData,
+    _Inout_ PGUEST_CONTEXT GuestContext
     )
 {
     int registers[4];   // EAX, EBX, ECX, and EDX
     int leaf, subLeaf;
     SEGMENT_ATTRIBUTE attribute;
 
-    UNREFERENCED_PARAMETER(VpData);
-
+    //
+    // Execute CPUID as requested.
+    //
     leaf = static_cast<int>(GuestContext->VpRegs->Rax);
     subLeaf = static_cast<int>(GuestContext->VpRegs->Rcx);
-
     __cpuidex(registers, leaf, subLeaf);
 
     switch (leaf)
     {
     case CPUID_PROCESSOR_AND_PROCESSOR_FEATURE_IDENTIFIERS:
+        //
+        // Indicate presence of a hypervisor by setting the bit that are
+        // reserved for use by hypervisor to indicate guest status. See "CPUID
+        // Fn0000_0001_ECX Feature Identifiers".
+        //
         registers[3] |= CPUID_FN0000_0001_ECX_HYPERVISOR_PRESENT;
         break;
-    case HYPERV_CPUID_VENDOR_AND_MAX_FUNCTIONS:
-        registers[0] = HYPERV_CPUID_MAX;
+    case CPUID_HV_VENDOR_AND_MAX_FUNCTIONS:
+        //
+        // Return a maximum supported hypervisor CPUID leaf range and a vendor
+        // ID signature as required by the spec.
+        //
+        registers[0] = CPUID_HV_MAX;
         registers[1] = 'pmiS';  // "SimpleSvm   "
         registers[2] = 'vSel';
         registers[3] = '   m';
         break;
-    case HYPERV_CPUID_INTERFACE:
+    case CPUID_HV_INTERFACE:
+        //
+        // Return non Hv#1 value. This indicate that the SimpleSvm does NOT
+        // conform to the Microsoft hypervisor interface.
+        //
         registers[0] = '0#vH';  // Hv#0
         registers[1] = registers[2] = registers[3] = 0;
         break;
-    case SV_CPUID_UNLOAD_SIMPLESVM:
-        if (subLeaf == SV_CPUID_UNLOAD_SIMPLESVM)
+    case CPUID_UNLOAD_SIMPLE_SVM:
+        if (subLeaf == CPUID_UNLOAD_SIMPLE_SVM)
         {
+            //
+            // Unload itself if the request is from the kernel mode.
+            //
             attribute.AsUInt16 = VpData->GuestVmcb.StateSaveArea.SsAttrib;
             if (attribute.Fields.Dpl == DPL_SYSTEM)
             {
@@ -529,73 +527,114 @@ SvHandleCpuid (
         break;
     }
 
+    //
+    // Update guest's GPRs with results.
+    //
     GuestContext->VpRegs->Rax = registers[0];
     GuestContext->VpRegs->Rbx = registers[1];
     GuestContext->VpRegs->Rcx = registers[2];
     GuestContext->VpRegs->Rdx = registers[3];
 
+    //
+    // Debug prints results. Very important to note that any use of API from
+    // the host context is unsafe and absolutely avoided, unless the API is
+    // documented to be accessible on IRQL IPI_LEVEL+. This is because
+    // interrupts are disabled when host code is running, and IPI is not going
+    // to be delivered when it is issued.
+    //
+    // This code is not exception and violating this rule. The reasons for this
+    // code are to demonstrate a bad example, and simply show that the SimpleSvm
+    // is functioning for a test purpose.
+    //
     if (KeGetCurrentIrql() <= DISPATCH_LEVEL)
     {
-        SvDebugPrint("CPUID: %08x-%08x : %08x %08x %08x %08x\n",
-                               leaf,
-                               subLeaf,
-                               registers[0],
-                               registers[1],
-                               registers[2],
-                               registers[3]);
+        SvDebugPrint("[SimpleSvm] CPUID: %08x-%08x : %08x %08x %08x %08x\n",
+                     leaf,
+                     subLeaf,
+                     registers[0],
+                     registers[1],
+                     registers[2],
+                     registers[3]);
     }
 
+    //
+    // Then, advance RIP to "complete" the instruction.
+    //
     VpData->GuestVmcb.StateSaveArea.Rip = VpData->GuestVmcb.ControlArea.NRip;
 }
 
 /*!
-    @brief      TBD.
+    @brief          Handles #VMEXIT due to execution of the WRMSR and RDMSR
+                    instructions.
 
-    @details    TBD.
+    @details        This protects EFER.SVME from being cleared by the guest by
+                    injecting #GP when it is about to be cleared.
 
-    @param[in]  TBD - TBD.
+    @param[inout]   VpData - Per processor data.
+    @param[inout]   GuestRegisters - Guest's GPRs.
  */
 _IRQL_requires_same_
 static
 VOID
 SvHandleMsrAccess (
-    _In_ PVIRTUAL_PROCESSOR_DATA VpData,
-    _In_ PGUEST_CONTEXT GuestContext
+    _Inout_ PVIRTUAL_PROCESSOR_DATA VpData,
+    _Inout_ PGUEST_CONTEXT GuestContext
     )
 {
     UINT64 writeValueLow, writeValueHi, writeValue;
 
+    //
+    // #VMEXIT should only occur on write accesses to IA32_MSR_EFER. 1 of
+    // ExitInfo1 indicates a write access.
+    //
     NT_ASSERT(GuestContext->VpRegs->Rcx == IA32_MSR_EFER);
     NT_ASSERT(VpData->GuestVmcb.ControlArea.ExitInfo1 != 0);
 
     writeValueLow = GuestContext->VpRegs->Rax & MAXUINT32;
     if ((writeValueLow & EFER_SVME) == 0)
     {
+        //
+        // Inject #GP if the guest attempts to clear the SVME bit. Protection of
+        // this bit is required because clearing the bit while guest is running
+        // leads to undefined behavior.
+        //
         SvInjectGeneralProtectionException(VpData);
     }
-    else
-    {
-        writeValueHi = GuestContext->VpRegs->Rdx & MAXUINT32;
-        writeValue = writeValueHi << 32 | writeValueLow;
-        VpData->GuestVmcb.StateSaveArea.Efer = writeValue;
 
-        VpData->GuestVmcb.StateSaveArea.Rip = VpData->GuestVmcb.ControlArea.NRip;
-    }
+    //
+    // Otherwise, update the MSR as requested. Important to note that the value
+    // should be checked not to allow any illegal values, and inject #GP as
+    // needed. Otherwise, the hypervisor attempts to resume the guest with an
+    // illegal EFER and immediately receives #VMEXIT due to VMEXIT_INVALID,
+    // which in our case, results in a bug check. See "Extended Feature Enable
+    // Register (EFER)" for what values are allowed.
+    //
+    // This code does not implement the check intentionally, for simplicity.
+    //
+    writeValueHi = GuestContext->VpRegs->Rdx & MAXUINT32;
+    writeValue = writeValueHi << 32 | writeValueLow;
+    VpData->GuestVmcb.StateSaveArea.Efer = writeValue;
+
+    //
+    // Then, advance RIP to "complete" the instruction.
+    //
+    VpData->GuestVmcb.StateSaveArea.Rip = VpData->GuestVmcb.ControlArea.NRip;
 }
 
 /*!
-    @brief      TBD.
+    @brief          Handles #VMEXIT due to execution of the VMRUN instruction.
 
-    @details    TBD.
+    @details        This function always injects #GP to the guest.
 
-    @param[in]  TBD - TBD.
+    @param[inout]   VpData - Per processor data.
+    @param[inout]   GuestRegisters - Guest's GPRs.
  */
 _IRQL_requires_same_
 static
 VOID
 SvHandleVmrun (
-    _In_ PVIRTUAL_PROCESSOR_DATA VpData,
-    _In_ PGUEST_CONTEXT GuestContext
+    _Inout_ PVIRTUAL_PROCESSOR_DATA VpData,
+    _Inout_ PGUEST_CONTEXT GuestContext
     )
 {
     UNREFERENCED_PARAMETER(GuestContext);
@@ -604,35 +643,35 @@ SvHandleVmrun (
 }
 
 /*!
-    @brief      TBD.
+    @brief          C-level entry point of the host code called from SvLaunchVm.
 
-    @details    TBD.
+    @details        This function loads save host state first, and then, handles
+                    #VMEXIT which may or may not change guest's state via VpData
+                    or GuestRegisters.
 
-    @param[in]  VpData - TBD.
-    @param[in]  GuestRegisters - TBD.
+                    Interrupts are disabled when this function is called due to
+                    the cleared GIF. Not all host state are loaded yet, so do it
+                    with the VMLOAD instruction.
 
-    @result     TRUE when virtualization is terminated; otherwise FALSE.
+                    If the #VMEXIT handler detects a request to unload the
+                    hypervisor, this function loads guest state, disables SVM
+                    and returns to execution flow where the #VMEXIT triggered.
+
+    @param[inout]   VpData - Per processor data.
+    @param[inout]   GuestRegisters - Guest's GPRs.
+
+    @result         TRUE when virtualization is terminated; otherwise FALSE.
  */
 _IRQL_requires_same_
 EXTERN_C
 BOOLEAN
 NTAPI
 SvHandleVmExit (
-    _In_ PVIRTUAL_PROCESSOR_DATA VpData,
-    _In_ PGUEST_REGISTERS GuestRegisters
+    _Inout_ PVIRTUAL_PROCESSOR_DATA VpData,
+    _Inout_ PGUEST_REGISTERS GuestRegisters
     )
 {
     GUEST_CONTEXT guestContext;
-
-    //;
-    //; Set the global interrupt flag again, but execute cli to make sure IF=0.
-    //;
-    //
-    // Set global interrupt flag (GIF)
-    //
-    // FIXME / TODO
-    _disable();
-    __svm_stgi();
 
     //
     // Load some host state that are not loaded on #VMEXIT.
@@ -715,9 +754,6 @@ SvHandleVmExit (
     // RAX is loaded from VMCB on VMRUN.
     //
     VpData->GuestVmcb.StateSaveArea.Rax = guestContext.VpRegs->Rax;
-
-    __svm_clgi();
-    _enable();
 
 Exit:
     NT_ASSERT(VpData->HostStackLayout.Reserved1 == MAXUINT64);
@@ -813,7 +849,7 @@ SvIsSimpleSvmHypervisorInstalled (
     // When the SimpleSvm hypervisor is installed, CPUID leaf 40000000h will
     // return "SimpleSvm   " as the vendor name.
     //
-    __cpuid(registers, HYPERV_CPUID_VENDOR_AND_MAX_FUNCTIONS);
+    __cpuid(registers, CPUID_HV_VENDOR_AND_MAX_FUNCTIONS);
     RtlCopyMemory(vendorId + 0, &registers[1], sizeof(registers[1]));
     RtlCopyMemory(vendorId + 4, &registers[2], sizeof(registers[2]));
     RtlCopyMemory(vendorId + 8, &registers[3], sizeof(registers[3]));
@@ -894,6 +930,10 @@ SvPrepareForVirtualization (
     // nested page tables is specified by the NCr3 field of VMCB.
     //
     // We have already build the nested page tables with SvBuildNestedPageTables.
+    //
+    // Note that our hypervisor does not trigger any additional #VMEXIT due to
+    // the use of Nested Page Tables since all physical addresses from 0-512 GB
+    // are configured to be accessible from the guest.
     //
     VpData->GuestVmcb.ControlArea.NpEnable |= SVM_NP_ENABLE_NP_ENABLE;
     VpData->GuestVmcb.ControlArea.NCr3 = pml4BasePa.QuadPart;
@@ -1012,7 +1052,7 @@ SvVirtualizeProcessor (
             SvAllocatePageAlingedPhysicalMemory(sizeof(VIRTUAL_PROCESSOR_DATA)));
     if (vpData == nullptr)
     {
-        SvDebugPrint("Insufficient memory.\n");
+        SvDebugPrint("[SimpleSvm] Insufficient memory.\n");
         status = STATUS_NO_MEMORY;
         goto Exit;
     }
@@ -1035,7 +1075,7 @@ SvVirtualizeProcessor (
     //
     if (SvIsSimpleSvmHypervisorInstalled() == FALSE)
     {
-        SvDebugPrint("Attempting to virtualize the processor.\n");
+        SvDebugPrint("[SimpleSvm] Attempting to virtualize the processor.\n");
         sharedVpData = reinterpret_cast<PSHARED_VIRTUAL_PROCESSOR_DATA>(Context);
 
         //
@@ -1062,32 +1102,7 @@ SvVirtualizeProcessor (
         KeBugCheck(MANUALLY_INITIATED_CRASH);
     }
 
-    SV_DEBUG_BREAK();
-    PEXCEPTION_POINTERS x;
-    __try
-    {
-        __writemsr(IA32_MSR_EFER,  __readmsr(IA32_MSR_EFER) & ~EFER_SVME);
-        SV_DEBUG_BREAK();
-    }
-    __except(x = GetExceptionInformation(), 1)
-    {
-        SvDebugPrint("exp %p\n", GetExceptionCode());
-        SV_DEBUG_BREAK();
-    }
-    SvDebugPrint("MSR %p\n", __readmsr(IA32_MSR_EFER));
-
-    __try
-    {
-        __svm_vmrun(vpData->HostStackLayout.GuestVmcbPa);
-        SV_DEBUG_BREAK();
-    }
-    __except(x = GetExceptionInformation(), 1)
-    {
-        SvDebugPrint("exp %p\n", GetExceptionCode());
-        SV_DEBUG_BREAK();
-    }
-
-    SvDebugPrint("The processor has been virtualized.\n");
+    SvDebugPrint("[SimpleSvm] The processor has been virtualized.\n");
     status = STATUS_SUCCESS;
 
 Exit:
@@ -1239,13 +1254,13 @@ SvDevirtualizeProcessor (
     // installed, this ECX is set to 'SSVM', and EDX:EAX indicates an address
     // of per processor data to be freed.
     //
-    __cpuidex(registers, SV_CPUID_UNLOAD_SIMPLESVM, SV_CPUID_UNLOAD_SIMPLESVM);
+    __cpuidex(registers, CPUID_UNLOAD_SIMPLE_SVM, CPUID_UNLOAD_SIMPLE_SVM);
     if (registers[2] != 'SSVM')
     {
         goto Exit;
     }
 
-    SvDebugPrint("The processor has been de-virtualized.\n");
+    SvDebugPrint("[SimpleSvm] The processor has been de-virtualized.\n");
 
     //
     // Get an address of per processor data indicated by EDX:EAX.
@@ -1552,7 +1567,7 @@ SvVirtualizeAllProcessors (
     //
     if (SvIsSvmSupported() == FALSE)
     {
-        SvDebugPrint("SVM is not fully supported on this processor.\n");
+        SvDebugPrint("[SimpleSvm] SVM is not fully supported on this processor.\n");
         status = STATUS_HV_FEATURE_UNAVAILABLE;
         goto Exit;
     }
@@ -1565,7 +1580,7 @@ SvVirtualizeAllProcessors (
         SvAllocatePageAlingedPhysicalMemory(sizeof(SHARED_VIRTUAL_PROCESSOR_DATA)));
     if (sharedVpData == nullptr)
     {
-        SvDebugPrint("Insufficient memory.\n");
+        SvDebugPrint("[SimpleSvm] Insufficient memory.\n");
         status = STATUS_NO_MEMORY;
         goto Exit;
     }
@@ -1577,7 +1592,7 @@ SvVirtualizeAllProcessors (
                                                     SVM_MSR_PERMISSIONS_MAP_SIZE);
     if (sharedVpData->MsrPermissionsMap == nullptr)
     {
-        SvDebugPrint("Insufficient memory.\n");
+        SvDebugPrint("[SimpleSvm] Insufficient memory.\n");
         status = STATUS_NO_MEMORY;
         goto Exit;
     }
@@ -1694,7 +1709,7 @@ DriverEntry (
     status = ExCreateCallback(&callbackObject, &objectAttributes, FALSE, TRUE);
     if (!NT_SUCCESS(status))
     {
-        SvDebugPrint("Failed to open the power state callback object.\n");
+        SvDebugPrint("[SimpleSvm] Failed to open the power state callback object.\n");
         goto Exit;
     }
 
@@ -1708,7 +1723,7 @@ DriverEntry (
     ObDereferenceObject(callbackObject);
     if (callbackRegistration == nullptr)
     {
-        SvDebugPrint("Failed to register a power state callback.\n");
+        SvDebugPrint("[SimpleSvm] Failed to register a power state callback.\n");
         status = STATUS_UNSUCCESSFUL;
         goto Exit;
     }
