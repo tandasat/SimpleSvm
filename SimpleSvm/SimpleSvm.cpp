@@ -109,11 +109,11 @@ typedef struct _VIRTUAL_PROCESSOR_DATA
         struct
         {
             UINT8 StackContents[KERNEL_STACK_SIZE - sizeof(PVOID) * 6];
-            UINT64 GuestVmcbPa;
+            UINT64 GuestVmcbPa;     // HostRsp
             UINT64 HostVmcbPa;
             struct _VIRTUAL_PROCESSOR_DATA *Self;
             PSHARED_VIRTUAL_PROCESSOR_DATA SharedVpData;
-            UINT64 Padding1;
+            UINT64 Padding1;        // To keep HostRsp 16 bytes aligned
             UINT64 Reserved1;
         } HostStackLayout;
     };
@@ -898,10 +898,12 @@ SvPrepareForVirtualization (
     //
     // Configure to trigger #VMEXIT with CPUID and VMRUN instructions. CPUID is
     // intercepted to present existence of the SimpleSvm hypervisor and provide
-    // an interface to ask it to unload itself. VMRUN is intercepted because it
-    // is required by the processor to enter the guest mode; otherwise, #VMEXIT
-    // occurs due to VMEXIT_INVALID when a processor attempts to enter the guest
-    // mode.
+    // an interface to ask it to unload itself.
+    //
+    // VMRUN is intercepted because it is required by the processor to enter the
+    // guest mode; otherwise, #VMEXIT occurs due to VMEXIT_INVALID when a
+    // processor attempts to enter the guest mode. See "Canonicalization and
+    // Consistency Checks" on "VMRUN Instruction".
     //
     VpData->GuestVmcb.ControlArea.InterceptMisc1 |= SVM_INTERCEPT_MISC1_CPUID;
     VpData->GuestVmcb.ControlArea.InterceptMisc2 |= SVM_INTERCEPT_MISC2_VMRUN;
@@ -919,7 +921,7 @@ SvPrepareForVirtualization (
     // single guest in our case. Use 1 as the most likely supported ASID by the
     // processor. The actual the supported number of ASID can be obtained with
     // CPUID. See "CPUID Fn8000_000A_EBX SVM Revision and Feature
-    // Identification". Zero of ASID is revered and illegal.
+    // Identification". Zero of ASID is reserved and illegal.
     //
     VpData->GuestVmcb.ControlArea.GuestAsid = 1;
 
