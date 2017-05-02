@@ -13,16 +13,27 @@
 
 #include <basetsd.h>
 
+//
+// A size of two the MSR permissions map.
+//
 #define SVM_MSR_PERMISSIONS_MAP_SIZE    PAGE_SIZE * 2
 
+//
+// See "SVM Related MSRs"
+//
+#define SVM_MSR_VM_CR                   0xc0010114
+#define SVM_MSR_VM_HSAVE_PA             0xc0010117
+
+#define SVM_VM_CR_SVMDIS                (1UL << 4)
+
+//
+// See "VMCB Layout, Control Area"
+//
 #define SVM_INTERCEPT_MISC1_CPUID       (1UL << 18)
 #define SVM_INTERCEPT_MISC1_MSR_PROT    (1UL << 28)
 #define SVM_INTERCEPT_MISC2_VMRUN       (1UL << 0)
 #define SVM_NP_ENABLE_NP_ENABLE         (1UL << 0)
 
-//
-// See "VMCB Layout, Control Area"
-//
 typedef struct _VMCB_CONTROL_AREA
 {
     UINT16 InterceptCrRead;             // +0x000

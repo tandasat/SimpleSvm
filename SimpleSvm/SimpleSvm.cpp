@@ -34,6 +34,13 @@ SvLaunchVm (
     _In_ PVOID HostRsp
     );
 
+//
+// x86-64 defined structures.
+//
+
+//
+// See "2-Mbyte PML4E有ong Mode" and "2-Mbyte PDPE有ong Mode".
+//
 typedef struct _PML4_ENTRY_2MB
 {
     union
@@ -59,6 +66,9 @@ typedef struct _PML4_ENTRY_2MB
 static_assert(sizeof(PML4_ENTRY_2MB) == 8,
               "PML4_ENTRY_1GB Size Mismatch");
 
+//
+// See "2-Mbyte PDE有ong Mode".
+//
 typedef struct _PD_ENTRY_2MB
 {
     union
@@ -87,80 +97,23 @@ typedef struct _PD_ENTRY_2MB
 static_assert(sizeof(PD_ENTRY_2MB) == 8,
               "PDE_ENTRY_2MB Size Mismatch");
 
-typedef struct _SHARED_VIRTUAL_PROCESSOR_DATA
-{
-    PVOID MsrPermissionsMap;
-    DECLSPEC_ALIGN(PAGE_SIZE) PML4_ENTRY_2MB Pml4Entries[1];    // Just for 512 GB
-    DECLSPEC_ALIGN(PAGE_SIZE) PDP_ENTRY_2MB PdpEntries[512];
-    DECLSPEC_ALIGN(PAGE_SIZE) PD_ENTRY_2MB PdeEntries[512][512];
-} SHARED_VIRTUAL_PROCESSOR_DATA, *PSHARED_VIRTUAL_PROCESSOR_DATA;
-
-typedef struct _VIRTUAL_PROCESSOR_DATA
-{
-    union
-    {
-        /*
-            Low     HostStackLimit[0]                        StackLimit
-            ^       ...
-            ^       HostStackLimit[KERNEL_STACK_SIZE - 2]    StackBase
-            High    HostStackLimit[KERNEL_STACK_SIZE - 1]    StackBase
-        */
-        DECLSPEC_ALIGN(PAGE_SIZE) UINT8 HostStackLimit[KERNEL_STACK_SIZE];
-        struct
-        {
-            UINT8 StackContents[KERNEL_STACK_SIZE - sizeof(PVOID) * 6];
-            UINT64 GuestVmcbPa;     // HostRsp
-            UINT64 HostVmcbPa;
-            struct _VIRTUAL_PROCESSOR_DATA *Self;
-            PSHARED_VIRTUAL_PROCESSOR_DATA SharedVpData;
-            UINT64 Padding1;        // To keep HostRsp 16 bytes aligned
-            UINT64 Reserved1;
-        } HostStackLayout;
-    };
-
-    DECLSPEC_ALIGN(PAGE_SIZE) VMCB GuestVmcb;
-    DECLSPEC_ALIGN(PAGE_SIZE) VMCB HostVmcb;
-    DECLSPEC_ALIGN(PAGE_SIZE) UINT8 HostStateArea[PAGE_SIZE];
-} VIRTUAL_PROCESSOR_DATA, *PVIRTUAL_PROCESSOR_DATA;
-static_assert(sizeof(VIRTUAL_PROCESSOR_DATA) == KERNEL_STACK_SIZE + PAGE_SIZE * 3,
-              "VIRTUAL_PROCESSOR_DATA Size Mismatch");
-
-typedef struct _GUEST_REGISTERS
-{
-    UINT64 R15;
-    UINT64 R14;
-    UINT64 R13;
-    UINT64 R12;
-    UINT64 R11;
-    UINT64 R10;
-    UINT64 R9;
-    UINT64 R8;
-    UINT64 Rdi;
-    UINT64 Rsi;
-    UINT64 Rbp;
-    UINT64 Rsp;
-    UINT64 Rbx;
-    UINT64 Rdx;
-    UINT64 Rcx;
-    UINT64 Rax;
-} GUEST_REGISTERS, *PGUEST_REGISTERS;
-
-typedef struct _GUEST_CONTEXT
-{
-    PGUEST_REGISTERS VpRegs;
-    BOOLEAN ExitVm;
-} GUEST_CONTEXT, *PGUEST_CONTEXT;
-
+//
+// See "GDTR and IDTR Format有ong Mode"
+//
 #include <pshpack1.h>
-typedef struct _DESCRIPTOR
+typedef struct _DESCRIPTOR_TABLE_REGISTER
 {
     UINT16 Limit;
     ULONG_PTR Base;
-} DESCRIPTOR, *PDESCRIPTOR;
-static_assert(sizeof(DESCRIPTOR) == 10,
-              "DESCRIPTOR Size Mismatch");
+} DESCRIPTOR_TABLE_REGISTER, *PDESCRIPTOR_TABLE_REGISTER;
+static_assert(sizeof(DESCRIPTOR_TABLE_REGISTER) == 10,
+              "DESCRIPTOR_TABLE_REGISTER Size Mismatch");
 #include <poppack.h>
 
+//
+// See "Long-Mode Segment Descriptors" and some of definitions
+// (eg, "Code-Segment Descriptor有ong Mode")
+//
 typedef struct _SEGMENT_DESCRIPTOR
 {
     union
@@ -209,28 +162,105 @@ typedef struct _SEGMENT_ATTRIBUTE
 static_assert(sizeof(SEGMENT_ATTRIBUTE) == 2,
               "SEGMENT_ATTRIBUTE Size Mismatch");
 
-#define IA32_MSR_PAT            0x00000277
-#define IA32_MSR_EFER           0xc0000080
-#define IA32_MSR_VM_CR          0xc0010114   // See: VM_CR MSR (C001_0114h)
-#define IA32_MSR_VM_HSAVE_PA    0xc0010117
+//
+// SimpleSVM specific structures.
+//
 
-#define VM_CR_SVMDIS    (1UL << 4)
-#define EFER_SVME       (1UL << 12)  // See: Extended Feature Enable Register (EFER)
+typedef struct _SHARED_VIRTUAL_PROCESSOR_DATA
+{
+    PVOID MsrPermissionsMap;
+    DECLSPEC_ALIGN(PAGE_SIZE) PML4_ENTRY_2MB Pml4Entries[1];    // Just for 512 GB
+    DECLSPEC_ALIGN(PAGE_SIZE) PDP_ENTRY_2MB PdpEntries[512];
+    DECLSPEC_ALIGN(PAGE_SIZE) PD_ENTRY_2MB PdeEntries[512][512];
+} SHARED_VIRTUAL_PROCESSOR_DATA, *PSHARED_VIRTUAL_PROCESSOR_DATA;
 
-#define CPUID_FN8000_0001_ECX_SVM                   (1ul << 2)  // See: CPUID Fn8000_0001_ECX Feature Identifiers
-#define CPUID_FN8000_000A_EDX_NP                    (1ul << 0)  // See: CPUID Fn8000_000A_EDX SVM Feature Identification
-#define CPUID_FN8000_000A_EDX_DECODE_ASSISTS        (1ul << 7)
+typedef struct _VIRTUAL_PROCESSOR_DATA
+{
+    union
+    {
+        //
+        //  Low     HostStackLimit[0]                        StackLimit
+        //  ^       ...
+        //  ^       HostStackLimit[KERNEL_STACK_SIZE - 2]    StackBase
+        //  High    HostStackLimit[KERNEL_STACK_SIZE - 1]    StackBase
+        //
+        DECLSPEC_ALIGN(PAGE_SIZE) UINT8 HostStackLimit[KERNEL_STACK_SIZE];
+        struct
+        {
+            UINT8 StackContents[KERNEL_STACK_SIZE - sizeof(PVOID) * 6];
+            UINT64 GuestVmcbPa;     // HostRsp
+            UINT64 HostVmcbPa;
+            struct _VIRTUAL_PROCESSOR_DATA *Self;
+            PSHARED_VIRTUAL_PROCESSOR_DATA SharedVpData;
+            UINT64 Padding1;        // To keep HostRsp 16 bytes aligned
+            UINT64 Reserved1;
+        } HostStackLayout;
+    };
+
+    DECLSPEC_ALIGN(PAGE_SIZE) VMCB GuestVmcb;
+    DECLSPEC_ALIGN(PAGE_SIZE) VMCB HostVmcb;
+    DECLSPEC_ALIGN(PAGE_SIZE) UINT8 HostStateArea[PAGE_SIZE];
+} VIRTUAL_PROCESSOR_DATA, *PVIRTUAL_PROCESSOR_DATA;
+static_assert(sizeof(VIRTUAL_PROCESSOR_DATA) == KERNEL_STACK_SIZE + PAGE_SIZE * 3,
+              "VIRTUAL_PROCESSOR_DATA Size Mismatch");
+
+typedef struct _GUEST_REGISTERS
+{
+    UINT64 R15;
+    UINT64 R14;
+    UINT64 R13;
+    UINT64 R12;
+    UINT64 R11;
+    UINT64 R10;
+    UINT64 R9;
+    UINT64 R8;
+    UINT64 Rdi;
+    UINT64 Rsi;
+    UINT64 Rbp;
+    UINT64 Rsp;
+    UINT64 Rbx;
+    UINT64 Rdx;
+    UINT64 Rcx;
+    UINT64 Rax;
+} GUEST_REGISTERS, *PGUEST_REGISTERS;
+
+typedef struct _GUEST_CONTEXT
+{
+    PGUEST_REGISTERS VpRegs;
+    BOOLEAN ExitVm;
+} GUEST_CONTEXT, *PGUEST_CONTEXT;
+
+
+//
+// x86-64 defined constants.
+//
+#define IA32_MSR_PAT    0x00000277
+#define IA32_MSR_EFER   0xc0000080
+
+#define EFER_SVME       (1UL << 12)
+
+#define RPL_MASK        3
+#define DPL_SYSTEM      0
+
+#define CPUID_FN8000_0001_ECX_SVM                   (1UL << 2)
 #define CPUID_FN0000_0001_ECX_HYPERVISOR_PRESENT    (1UL << 31)
+#define CPUID_FN8000_000A_EDX_NP                    (1UL << 0)
 
-#define CPUID_MAX_STANDARD_FN_NUMBER_AND_VENDOR_STRING      0x00000000   // See: Function 0h柚aximum Standard Function Number and Vendor String
-#define CPUID_PROCESSOR_AND_PROCESSOR_FEATURE_IDENTIFIERS   0x00000001
-#define CPUID_HV_VENDOR_AND_MAX_FUNCTIONS                   0x40000000
-#define CPUID_HV_INTERFACE                                  0x40000001
-#define CPUID_HV_MAX                                        CPUID_HV_INTERFACE
-#define CPUID_UNLOAD_SIMPLE_SVM                             0x41414141
+#define CPUID_MAX_STANDARD_FN_NUMBER_AND_VENDOR_STRING          0x00000000
+#define CPUID_PROCESSOR_AND_PROCESSOR_FEATURE_IDENTIFIERS       0x00000001
+#define CPUID_PROCESSOR_AND_PROCESSOR_FEATURE_IDENTIFIERS_EX    0x80000001
+#define CPUID_SVM_FEATURES                                      0x8000000a
+//
+// The Microsoft Hypervisor interface defined constants.
+//
+#define CPUID_HV_VENDOR_AND_MAX_FUNCTIONS   0x40000000
+#define CPUID_HV_INTERFACE                  0x40000001
 
-#define RPL_MASK                3
-#define DPL_SYSTEM              0
+//
+// SimpleSVM specific constants.
+//
+#define CPUID_UNLOAD_SIMPLE_SVM     0x41414141
+#define CPUID_HV_MAX                CPUID_HV_INTERFACE
 
 /*!
     @brief      Breaks into a kernel debugger when it is present.
@@ -879,7 +909,7 @@ SvPrepareForVirtualization (
     _In_ const CONTEXT *ContextRecord
     )
 {
-    DESCRIPTOR gdtr, idtr;
+    DESCRIPTOR_TABLE_REGISTER gdtr, idtr;
     PHYSICAL_ADDRESS guestVmcbPa, hostVmcbPa, hostStateAreaPa, pml4BasePa, msrpmPa;
 
     //
@@ -1002,7 +1032,7 @@ SvPrepareForVirtualization (
     // saves some of the current state on VMRUN and loads them on #VMEXIT. See
     // "VM_HSAVE_PA MSR (C001_0117h)".
     //
-    __writemsr(IA32_MSR_VM_HSAVE_PA, hostStateAreaPa.QuadPart);
+    __writemsr(SVM_MSR_VM_HSAVE_PA, hostStateAreaPa.QuadPart);
 
     //
     // Also, save some of the current state to VMCB for the host. This is loaded
@@ -1487,7 +1517,8 @@ SvIsSvmSupported (
 
     //
     // Test if the current processor is AMD one. An AMD processor should return
-    // "AuthenticAMD" from CPUID function 0.
+    // "AuthenticAMD" from CPUID function 0. See "Function 0h柚aximum Standard
+    // Function Number and Vendor String".
     //
     __cpuid(registers, CPUID_MAX_STANDARD_FN_NUMBER_AND_VENDOR_STRING);
     if ((registers[1] != 'htuA') ||
@@ -1499,9 +1530,9 @@ SvIsSvmSupported (
 
     //
     // Test if the SVM feature is supported by the current processor. See
-    // "Enabling SVM".
+    // "Enabling SVM" and "CPUID Fn8000_0001_ECX Feature Identifiers".
     //
-    __cpuid(registers, 0x80000001);
+    __cpuid(registers, CPUID_PROCESSOR_AND_PROCESSOR_FEATURE_IDENTIFIERS_EX);
     if ((registers[2] & CPUID_FN8000_0001_ECX_SVM) == 0)
     {
         goto Exit;
@@ -1509,9 +1540,10 @@ SvIsSvmSupported (
 
     //
     // Test if the Nested Page Tables feature is supported by the current
-    // processor. See "Enabling Nested Paging".
+    // processor. See "Enabling Nested Paging" and "CPUID Fn8000_000A_EDX SVM
+    // Feature Identification".
     //
-    __cpuid(registers, 0x8000000a);
+    __cpuid(registers, CPUID_SVM_FEATURES);
     if ((registers[3] & CPUID_FN8000_000A_EDX_NP) == 0)
     {
         goto Exit;
@@ -1523,8 +1555,8 @@ SvIsSvmSupported (
     // VM_CR.SVMDIS is clear, EFER.SVME can be written normally and SVM can be
     // enabled. See "Enabling SVM".
     //
-    vmcr = __readmsr(IA32_MSR_VM_CR);
-    if ((vmcr & VM_CR_SVMDIS) != 0)
+    vmcr = __readmsr(SVM_MSR_VM_CR);
+    if ((vmcr & SVM_VM_CR_SVMDIS) != 0)
     {
         goto Exit;
     }
@@ -1776,7 +1808,7 @@ SvDriverUnload (
     SV_DEBUG_BREAK();
 
     //
-    // Un-register the power state callback.
+    // Unregister the power state callback.
     //
     NT_ASSERT(g_PowerCallbackRegistration);
     ExUnregisterCallback(g_PowerCallbackRegistration);

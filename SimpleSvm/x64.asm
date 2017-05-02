@@ -112,7 +112,8 @@ SvLV10: ;
         ; - saves current guest state into and update VMCB to provide information
         ;   to handle #VMEXIT
         ; - loads the host state previously saved by the VMRUN instruction
-        ; See "#VMEXIT" for more details.
+        ; See "#VMEXIT" in the volume 2 and "VMRUN" in the volume 3 for more
+        ; details.
         ;
         vmrun rax       ; Switch to the guest until #VMEXIT
 
