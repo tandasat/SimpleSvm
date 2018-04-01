@@ -5,7 +5,7 @@
 
     @author     Satoshi Tanda
 
-    @copyright  Copyright (c) 2017, Satoshi Tanda. All rights reserved.
+    @copyright  Copyright (c) 2017-2018, Satoshi Tanda. All rights reserved.
  */
 #define POOL_NX_OPTIN   1
 #include "SimpleSvm.hpp"
@@ -190,7 +190,7 @@ typedef struct _VIRTUAL_PROCESSOR_DATA
             UINT8 StackContents[KERNEL_STACK_SIZE - sizeof(PVOID) * 6];
             UINT64 GuestVmcbPa;     // HostRsp
             UINT64 HostVmcbPa;
-            struct _VIRTUAL_PROCESSOR_DATA *Self;
+            struct _VIRTUAL_PROCESSOR_DATA* Self;
             PSHARED_VIRTUAL_PROCESSOR_DATA SharedVpData;
             UINT64 Padding1;        // To keep HostRsp 16 bytes aligned
             UINT64 Reserved1;
@@ -343,16 +343,7 @@ SvAllocatePageAlingedPhysicalMemory (
     //
     NT_ASSERT(NumberOfBytes >= PAGE_SIZE);
 
-    //
-    // Suppress the below prefast warning due to use of POOL_NX_OPTIN.
-    //
-    // The current function is permitted to run at an IRQ level above the
-    // maximum permitted for 'ExAllocatePoolWithTag' (1). Prior function calls
-    // or annotation are inconsistent with use of that function:  The current
-    // function may need _IRQL_requires_max_, or it may be that the limit is set
-    // by some prior call.
-    //
-#pragma prefast(disable : 28118)
+#pragma prefast(disable : 28118 __WARNING_ERROR, "FP due to POOL_NX_OPTIN.")
     memory = ExAllocatePoolWithTag(NonPagedPool, NumberOfBytes, 'MVSS');
     if (memory != nullptr)
     {
@@ -392,7 +383,6 @@ SvFreePageAlingedPhysicalMemory (
     @result     A pointer to the allocated memory filled with zero; or NULL when
                 there is insufficient memory to allocate requested size.
  */
-__drv_allocatesMem(Mem)
 _Post_writable_byte_size_(NumberOfBytes)
 _Post_maybenull_
 _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -410,17 +400,7 @@ SvAllocateContiguousMemory (
     boundary.QuadPart = lowest.QuadPart = 0;
     highest.QuadPart = -1;
 
-    //
-    // Suppress the below prefast warning since there is no alternative API for
-    // Windows 7.
-    //
-    // warning C30030: Warning: MEMORY_CACHING_TYPE MmCached was used. This
-    // results in executable memory. If cached and/or executable memory is
-    // required then you can ignore this. Alternate API is
-    // MmAllocateContiguousNodeMemory - please review examples in MSDN for
-    // errors in the range 30029-30035
-    //
-#pragma prefast(disable : 30030)
+#pragma prefast(disable : 30030, "No alternative API on Windows 7.")
     memory = MmAllocateContiguousMemorySpecifyCacheNode(NumberOfBytes,
                                                         lowest,
                                                         highest,
@@ -735,6 +715,7 @@ SvHandleVmExit (
         break;
     default:
         SV_DEBUG_BREAK();
+#pragma prefast(disable : __WARNING_USE_OTHER_FUNCTION, "Unrecoverble path.")
         KeBugCheck(MANUALLY_INITIATED_CRASH);
     }
 
@@ -906,7 +887,7 @@ VOID
 SvPrepareForVirtualization (
     _Inout_ PVIRTUAL_PROCESSOR_DATA VpData,
     _In_ PSHARED_VIRTUAL_PROCESSOR_DATA SharedVpData,
-    _In_ const CONTEXT *ContextRecord
+    _In_ const CONTEXT* ContextRecord
     )
 {
     DESCRIPTOR_TABLE_REGISTER gdtr, idtr;
@@ -1080,12 +1061,15 @@ SvVirtualizeProcessor (
     //
     // Allocate per processor data.
     //
+#pragma prefast(push)
+#pragma prefast(disable : __WARNING_MEMORY_LEAK, "Ownership is taken on success.")
     vpData = reinterpret_cast<PVIRTUAL_PROCESSOR_DATA>(
             SvAllocatePageAlingedPhysicalMemory(sizeof(VIRTUAL_PROCESSOR_DATA)));
+#pragma prefast(pop)
     if (vpData == nullptr)
     {
         SvDebugPrint("[SimpleSvm] Insufficient memory.\n");
-        status = STATUS_NO_MEMORY;
+        status = STATUS_INSUFFICIENT_RESOURCES;
         goto Exit;
     }
 
@@ -1138,8 +1122,7 @@ SvVirtualizeProcessor (
     status = STATUS_SUCCESS;
 
 Exit:
-    if ((!NT_SUCCESS(status)) &&
-        (vpData != nullptr))
+    if ((!NT_SUCCESS(status)) && (vpData != nullptr))
     {
         //
         // Frees per processor data if allocated and this function is
@@ -1167,7 +1150,8 @@ Exit:
     @param[out] NumOfProcessorCompleted - A pointer to receive a number of
                 processors executed the callback successfully.
 
-    @result     STATUS_SUCCESS on success; otherwise, an appropriate error code.
+    @result     STATUS_SUCCESS when Callback executed and returned STATUS_SUCCESS
+	            on all processors; otherwise, an appropriate error code.
  */
 _IRQL_requires_max_(APC_LEVEL)
 _IRQL_requires_min_(PASSIVE_LEVEL)
@@ -1236,7 +1220,7 @@ Exit:
     // i must be the same as the number of processors on the system when this
     // function returns STATUS_SUCCESS;
     //
-    NT_ASSERT(!NT_SUCCESS(status) || i == numOfProcessors);
+    NT_ASSERT(!NT_SUCCESS(status) || (i == numOfProcessors));
 
     //
     // Set a number of processors that successfully executed callback if the
@@ -1274,7 +1258,7 @@ SvDevirtualizeProcessor (
     int registers[4];   // EAX, EBX, ECX, and EDX
     UINT64 high, low;
     PVIRTUAL_PROCESSOR_DATA vpData;
-    PSHARED_VIRTUAL_PROCESSOR_DATA *sharedVpDataPtr;
+    PSHARED_VIRTUAL_PROCESSOR_DATA* sharedVpDataPtr;
 
     if (!ARGUMENT_PRESENT(Context))
     {
@@ -1305,7 +1289,7 @@ SvDevirtualizeProcessor (
     //
     // Save an address of shared data, then free per processor data.
     //
-    sharedVpDataPtr = reinterpret_cast<PSHARED_VIRTUAL_PROCESSOR_DATA *>(Context);
+    sharedVpDataPtr = reinterpret_cast<PSHARED_VIRTUAL_PROCESSOR_DATA*>(Context);
     *sharedVpDataPtr = vpData->HostStackLayout.SharedVpData;
     SvFreePageAlingedPhysicalMemory(vpData);
 
@@ -1336,7 +1320,9 @@ SvDevirtualizeAllProcessors (
     //
     // De-virtualize all processors and free shared data when returned.
     //
-    SvExecuteOnEachProcessor(SvDevirtualizeProcessor, &sharedVpData, nullptr);
+    NT_VERIFY(NT_SUCCESS(SvExecuteOnEachProcessor(SvDevirtualizeProcessor,
+                                                  &sharedVpData,
+                                                  nullptr)));
     if (sharedVpData != nullptr)
     {
         SvFreeContiguousMemory(sharedVpData->MsrPermissionsMap);
@@ -1610,12 +1596,15 @@ SvVirtualizeAllProcessors (
     // Allocate a data structure shared across all processors. This data is
     // page tables used for Nested Page Tables.
     //
+#pragma prefast(push)
+#pragma prefast(disable : __WARNING_MEMORY_LEAK, "Ownership is taken on success.")
     sharedVpData = reinterpret_cast<PSHARED_VIRTUAL_PROCESSOR_DATA>(
         SvAllocatePageAlingedPhysicalMemory(sizeof(SHARED_VIRTUAL_PROCESSOR_DATA)));
+#pragma prefast(pop)
     if (sharedVpData == nullptr)
     {
         SvDebugPrint("[SimpleSvm] Insufficient memory.\n");
-        status = STATUS_NO_MEMORY;
+        status = STATUS_INSUFFICIENT_RESOURCES;
         goto Exit;
     }
 
@@ -1627,7 +1616,7 @@ SvVirtualizeAllProcessors (
     if (sharedVpData->MsrPermissionsMap == nullptr)
     {
         SvDebugPrint("[SimpleSvm] Insufficient memory.\n");
-        status = STATUS_NO_MEMORY;
+        status = STATUS_INSUFFICIENT_RESOURCES;
         goto Exit;
     }
 
@@ -1861,7 +1850,7 @@ SvPowerCallbackRoutine (
         //
         // The system has just reentered S0. Re-virtualize all processors.
         //
-        SvVirtualizeAllProcessors();
+        NT_VERIFY(NT_SUCCESS(SvVirtualizeAllProcessors()));
     }
     else
     {
