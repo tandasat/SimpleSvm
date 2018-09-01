@@ -681,6 +681,7 @@ SvHandleVmExit (
     )
 {
     GUEST_CONTEXT guestContext;
+    KIRQL oldIrql;
 
     //
     // Load some host state that are not loaded on #VMEXIT.
@@ -688,6 +689,22 @@ SvHandleVmExit (
     __svm_vmload(VpData->HostStackLayout.HostVmcbPa);
 
     NT_ASSERT(VpData->HostStackLayout.Reserved1 == MAXUINT64);
+
+    //
+    // Raise the IRQL to the DISPATCH_LEVEL level. This has no actual effect since
+    // interrupts are disabled at #VMEXI but warrants bug check when some of
+    // kernel API that are not usable on this context is called with Driver
+    // Verifier. This protects developers from accidentally writing such #VMEXIT
+    // handling code. This should actually raise IRQL to HIGH_LEVEL to represent
+    // this running context better, but our Logger code is not designed to run at
+    // that level unfortunately. Finally, note that this API is a thin wrapper
+    // of mov-to-CR8 on x64 and safe to call on this context.
+    //
+    oldIrql = KeGetCurrentIrql();
+    if (oldIrql < DISPATCH_LEVEL)
+    {
+        KeRaiseIrqlToDpcLevel();
+    }
 
     //
     // Guest's RAX is overwritten by the host's value on #VMEXIT and saved in
@@ -716,6 +733,16 @@ SvHandleVmExit (
         SV_DEBUG_BREAK();
 #pragma prefast(disable : __WARNING_USE_OTHER_FUNCTION, "Unrecoverble path.")
         KeBugCheck(MANUALLY_INITIATED_CRASH);
+    }
+
+    //
+    // Again, no effect to change IRQL but restoring it here since a #VMEXIT
+    // handler where the developers most likely call the kernel API inadvertently
+    // is already executed.
+    //
+    if (oldIrql < DISPATCH_LEVEL)
+    {
+        KeLowerIrql(oldIrql);
     }
 
     //
