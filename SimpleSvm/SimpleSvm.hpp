@@ -5,18 +5,16 @@
 
     @author     Satoshi Tanda
 
-    @copyright  Copyright (c) 2017, Satoshi Tanda. All rights reserved.
+    @copyright  Copyright (c) 2017-2018, Satoshi Tanda. All rights reserved.
  */
 #pragma once
-#ifndef __SIMPLE_SVM_HPP
-#define __SIMPLE_SVM_HPP
 
 #include <basetsd.h>
 
 //
 // A size of two the MSR permissions map.
 //
-#define SVM_MSR_PERMISSIONS_MAP_SIZE    PAGE_SIZE * 2
+#define SVM_MSR_PERMISSIONS_MAP_SIZE    (PAGE_SIZE * 2)
 
 //
 // See "SVM Related MSRs"
@@ -360,5 +358,3 @@ static_assert(sizeof(EVENTINJ) == 8,
 #define AVIC_NOACCEL                0x0402
 #define VMEXIT_VMGEXIT              0x0403
 #define VMEXIT_INVALID              -1
-
-#endif

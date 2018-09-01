@@ -39,7 +39,7 @@ SvLaunchVm (
 //
 
 //
-// See "2-Mbyte PML4E有ong Mode" and "2-Mbyte PDPE有ong Mode".
+// See "2-Mbyte PML4E-Long Mode" and "2-Mbyte PDPE-Long Mode".
 //
 typedef struct _PML4_ENTRY_2MB
 {
@@ -67,7 +67,7 @@ static_assert(sizeof(PML4_ENTRY_2MB) == 8,
               "PML4_ENTRY_1GB Size Mismatch");
 
 //
-// See "2-Mbyte PDE有ong Mode".
+// See "2-Mbyte PDE-Long Mode".
 //
 typedef struct _PD_ENTRY_2MB
 {
@@ -98,7 +98,7 @@ static_assert(sizeof(PD_ENTRY_2MB) == 8,
               "PDE_ENTRY_2MB Size Mismatch");
 
 //
-// See "GDTR and IDTR Format有ong Mode"
+// See "GDTR and IDTR Format-Long Mode"
 //
 #include <pshpack1.h>
 typedef struct _DESCRIPTOR_TABLE_REGISTER
@@ -112,7 +112,7 @@ static_assert(sizeof(DESCRIPTOR_TABLE_REGISTER) == 10,
 
 //
 // See "Long-Mode Segment Descriptors" and some of definitions
-// (eg, "Code-Segment Descriptor有ong Mode")
+// (eg, "Code-Segment Descriptor-Long Mode")
 //
 typedef struct _SEGMENT_DESCRIPTOR
 {
@@ -291,7 +291,6 @@ static PVOID g_PowerCallbackRegistration;
     @brief      Sends a message to the kernel debugger.
 
     @param[in]  Format - The format string to print.
-    @param[in]  arguments - Arguments for the format string, as in printf.
  */
 _IRQL_requires_max_(DISPATCH_LEVEL)
 _IRQL_requires_same_
@@ -446,7 +445,7 @@ SvInjectGeneralProtectionException (
 
     //
     // Inject #GP(vector = 13, type = 3 = exception) with a valid error code.
-    // An error code are always zero. See "#GP宥eneral-Protection Exception
+    // An error code are always zero. See "#GP-General-Protection Exception
     // (Vector 13)" for details about the error code.
     //
     event.AsUInt64 = 0;
@@ -471,7 +470,7 @@ SvInjectGeneralProtectionException (
                     for details of the interface.
 
     @param[inout]   VpData - Per processor data.
-    @param[inout]   GuestRegisters - Guest's GPRs.
+    @param[inout]   GuestContext - Guest's GPRs.
  */
 _IRQL_requires_same_
 static
@@ -581,7 +580,7 @@ SvHandleCpuid (
                     injecting #GP when it is about to be cleared.
 
     @param[inout]   VpData - Per processor data.
-    @param[inout]   GuestRegisters - Guest's GPRs.
+    @param[inout]   GuestContext - Guest's GPRs.
  */
 _IRQL_requires_same_
 static
@@ -637,7 +636,7 @@ SvHandleMsrAccess (
     @details        This function always injects #GP to the guest.
 
     @param[inout]   VpData - Per processor data.
-    @param[inout]   GuestRegisters - Guest's GPRs.
+    @param[inout]   GuestContext - Guest's GPRs.
  */
 _IRQL_requires_same_
 static
@@ -876,9 +875,10 @@ SvIsSimpleSvmHypervisorInstalled (
                 processor state, and enters the guest mode on the current
                 processor.
 
-    @param[in]  Context - A pointer of share data.
-
-    @result     STATUS_SUCCESS on success; otherwise, an appropriate error code.
+    @param[inout] VpData - The address of per processor data.
+    @param[in]    SharedVpData - The address of share data.
+    @param[in]    ContextRecord - The address of CONETEXT to use as an initial
+                  context of the processor after it is virtualized.
  */
 _IRQL_requires_(DISPATCH_LEVEL)
 _IRQL_requires_same_
@@ -1046,15 +1046,23 @@ SvVirtualizeProcessor (
     NTSTATUS status;
     PSHARED_VIRTUAL_PROCESSOR_DATA sharedVpData;
     PVIRTUAL_PROCESSOR_DATA vpData;
-    CONTEXT contextRecord;
+    PCONTEXT contextRecord;
 
     SV_DEBUG_BREAK();
 
     vpData = nullptr;
 
-    if (!ARGUMENT_PRESENT(Context))
+    NT_ASSERT(ARGUMENT_PRESENT(Context));
+    _Analysis_assume_(ARGUMENT_PRESENT(Context));
+
+    contextRecord = reinterpret_cast<PCONTEXT>(ExAllocatePoolWithTag(
+                                                        NonPagedPool,
+                                                        sizeof(*contextRecord),
+                                                        'MVSS'));
+    if (contextRecord == nullptr)
     {
-        status = STATUS_INVALID_PARAMETER_1;
+        SvDebugPrint("[SimpleSvm] Insufficient memory.\n");
+        status = STATUS_INSUFFICIENT_RESOURCES;
         goto Exit;
     }
 
@@ -1079,7 +1087,7 @@ SvVirtualizeProcessor (
     // when virtualization starts by the later call of SvLaunchVm, a processor
     // resume its execution at this location and state.
     //
-    RtlCaptureContext(&contextRecord);
+    RtlCaptureContext(contextRecord);
 
     //
     // First time of this execution, the SimpleSvm hypervisor is not installed
@@ -1104,7 +1112,7 @@ SvVirtualizeProcessor (
         // Set up VMCB, the structure describes the guest state and what events
         // within the guest should be intercepted, ie, triggers #VMEXIT.
         //
-        SvPrepareForVirtualization(vpData, sharedVpData, &contextRecord);
+        SvPrepareForVirtualization(vpData, sharedVpData, contextRecord);
 
         //
         // Switch to the host RSP to run as the host (hypervisor), and then
@@ -1122,6 +1130,10 @@ SvVirtualizeProcessor (
     status = STATUS_SUCCESS;
 
 Exit:
+    if (contextRecord != nullptr)
+    {
+        ExFreePoolWithTag(contextRecord, 'MVSS');
+    }
     if ((!NT_SUCCESS(status)) && (vpData != nullptr))
     {
         //
@@ -1151,7 +1163,7 @@ Exit:
                 processors executed the callback successfully.
 
     @result     STATUS_SUCCESS when Callback executed and returned STATUS_SUCCESS
-	            on all processors; otherwise, an appropriate error code.
+                on all processors; otherwise, an appropriate error code.
  */
 _IRQL_requires_max_(APC_LEVEL)
 _IRQL_requires_min_(PASSIVE_LEVEL)
@@ -1461,6 +1473,35 @@ SvBuildNestedPageTables (
         //
         // One page directory entry controls 512 page directory entries.
         //
+        // We do not explicitly configure PAT in the NPT entry. The consequences
+        // of this are: 1) pages whose PAT (Page Attribute Table) type is the
+        // Write-Combining (WC) memory type could be treated as the
+        // Write-Combining Plus (WC+) while it should be WC when the MTRR type is
+        // either Write Protect (WP), Writethrough (WT) or Writeback (WB), and
+        // 2) pages whose PAT type is Uncacheable Minus (UC-) could be treated
+        // as Cache Disabled (CD) while it should be WC, when MTRR type is WC.
+        //
+        // While those are not desirable, this is acceptable given that 1) only
+        // introduces additional cache snooping and associated performance
+        // penalty, which would not be significant since WC+ still lets
+        // processors combine multiple writes into one and avoid large
+        // performance penalty due to frequent writes to memory without caching.
+        // 2) might be worse but I have not seen MTRR ranges configured as WC
+        // on testing, hence the unintentional UC- will just results in the same
+        // effective memory type as what would be with UC.
+        //
+        // See "Memory Types" (7.4), for details of memory types,
+        // "PAT-Register PA-Field Indexing", "Combining Guest and Host PAT Types",
+        // and "Combining PAT and MTRR Types" for how the effective memory type
+        // is determined based on Guest PAT type, Host PAT type, and the MTRR
+        // type.
+        //
+        // The correct approach may be to look up the guest PTE and copy the
+        // caching related bits (PAT, PCD, and PWT) when constructing NTP
+        // entries for non RAM regions, so the combined PAT will always be the
+        // same as the guest PAT type. This may be done when any issue manifests
+        // with the current implementation.
+        //
         for (ULONG64 j = 0; j < 512; j++)
         {
             //
@@ -1503,7 +1544,7 @@ SvIsSvmSupported (
 
     //
     // Test if the current processor is AMD one. An AMD processor should return
-    // "AuthenticAMD" from CPUID function 0. See "Function 0h柚aximum Standard
+    // "AuthenticAMD" from CPUID function 0. See "Function 0h-Maximum Standard
     // Function Number and Vendor String".
     //
     __cpuid(registers, CPUID_MAX_STANDARD_FN_NUMBER_AND_VENDOR_STRING);
