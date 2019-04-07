@@ -5,7 +5,7 @@
 
     @author     Satoshi Tanda
 
-    @copyright  Copyright (c) 2017-2018, Satoshi Tanda. All rights reserved.
+    @copyright  Copyright (c) 2017-2019, Satoshi Tanda. All rights reserved.
  */
 #pragma once
 
@@ -309,7 +309,7 @@ static_assert(sizeof(EVENTINJ) == 8,
 #define VMEXIT_PUSHF                0x0070
 #define VMEXIT_POPF                 0x0071
 #define VMEXIT_CPUID                0x0072
-#define VMEXIT_RSM =                0x0073
+#define VMEXIT_RSM                  0x0073
 #define VMEXIT_IRET                 0x0074
 #define VMEXIT_SWINT                0x0075
 #define VMEXIT_INVD                 0x0076

@@ -5,7 +5,7 @@
 ;
 ; @author     Satoshi Tanda
 ;
-; @copyright  Copyright (c) 2017, Satoshi Tanda. All rights reserved.
+; @copyright  Copyright (c) 2017-2019, Satoshi Tanda. All rights reserved.
 ;
 .code
 
@@ -91,7 +91,7 @@ SvLV10: ;
         ; ----
         ;
         mov rax, [rsp]  ; RAX <= VpData->HostStackLayout.GuestVmcbPa
-        vmload rax      ; load previously save guest state from VMCB
+        vmload rax      ; load previously saved guest state from VMCB
 
         ;
         ; Start the guest. The VMRUN instruction resumes execution of the guest
