@@ -578,7 +578,8 @@ SvHandleCpuid (
                     instructions.
 
     @details        This protects EFER.SVME from being cleared by the guest by
-                    injecting #GP when it is about to be cleared.
+                    injecting #GP when it is about to be cleared. For other MSR
+                    access, it passes-through.
 
     @param[in,out]  VpData - Per processor data.
     @param[in,out]  GuestContext - Guest's GPRs.
@@ -591,39 +592,91 @@ SvHandleMsrAccess (
     _Inout_ PGUEST_CONTEXT GuestContext
     )
 {
-    UINT64 writeValueLow, writeValueHi, writeValue;
+    ULARGE_INTEGER value;
+    UINT32 msr;
+    BOOLEAN writeAccess;
+
+    msr = GuestContext->VpRegs->Rcx & MAXUINT32;
+    writeAccess = (VpData->GuestVmcb.ControlArea.ExitInfo1 != 0);
 
     //
-    // #VMEXIT should only occur on write accesses to IA32_MSR_EFER. 1 of
-    // ExitInfo1 indicates a write access.
+    // If IA32_MSR_EFER is accessed for write, we must protect the EFER_SVME bit
+    // from being cleared.
     //
-    NT_ASSERT(GuestContext->VpRegs->Rcx == IA32_MSR_EFER);
-    NT_ASSERT(VpData->GuestVmcb.ControlArea.ExitInfo1 != 0);
-
-    writeValueLow = GuestContext->VpRegs->Rax & MAXUINT32;
-    if ((writeValueLow & EFER_SVME) == 0)
+    if (msr == IA32_MSR_EFER)
     {
         //
-        // Inject #GP if the guest attempts to clear the SVME bit. Protection of
-        // this bit is required because clearing the bit while guest is running
-        // leads to undefined behavior.
+        // #VMEXIT on IA32_MSR_EFER access should only occur on write access.
         //
-        SvInjectGeneralProtectionException(VpData);
-    }
+        NT_ASSERT(writeAccess != FALSE);
 
-    //
-    // Otherwise, update the MSR as requested. Important to note that the value
-    // should be checked not to allow any illegal values, and inject #GP as
-    // needed. Otherwise, the hypervisor attempts to resume the guest with an
-    // illegal EFER and immediately receives #VMEXIT due to VMEXIT_INVALID,
-    // which in our case, results in a bug check. See "Extended Feature Enable
-    // Register (EFER)" for what values are allowed.
-    //
-    // This code does not implement the check intentionally, for simplicity.
-    //
-    writeValueHi = GuestContext->VpRegs->Rdx & MAXUINT32;
-    writeValue = writeValueHi << 32 | writeValueLow;
-    VpData->GuestVmcb.StateSaveArea.Efer = writeValue;
+        value.LowPart = GuestContext->VpRegs->Rax & MAXUINT32;
+        value.HighPart = GuestContext->VpRegs->Rdx & MAXUINT32;
+        if ((value.QuadPart & EFER_SVME) == 0)
+        {
+            //
+            // Inject #GP if the guest attempts to clear the SVME bit. Protection of
+            // this bit is required because clearing the bit while guest is running
+            // leads to undefined behavior.
+            //
+            SvInjectGeneralProtectionException(VpData);
+        }
+
+        //
+        // Otherwise, update the MSR as requested. Important to note that the value
+        // should be checked not to allow any illegal values, and inject #GP as
+        // needed. Otherwise, the hypervisor attempts to resume the guest with an
+        // illegal EFER and immediately receives #VMEXIT due to VMEXIT_INVALID,
+        // which in our case, results in a bug check. See "Extended Feature Enable
+        // Register (EFER)" for what values are allowed.
+        //
+        // This code does not implement the check intentionally, for simplicity.
+        //
+        VpData->GuestVmcb.StateSaveArea.Efer = value.QuadPart;
+    }
+    else
+    {
+        //
+        // If the MSR being accessed is not IA32_MSR_EFER, assert that #VMEXIT
+        // can only occur on access to MSR outside the ranges controlled with
+        // the MSR permissions map. This is true because the map is configured
+        // not to intercept any MSR access but IA32_MSR_EFER. See
+        // "MSR Ranges Covered by MSRPM" in "MSR Intercepts" for the MSR ranges
+        // controlled by the map.
+        //
+        // Note that VMware Workstation has a bug that access to unimplemented
+        // MSRs unconditionally causes #VMEXIT ignoring bits in the MSR
+        // permissions map. This can be tested by reading MSR zero, for example.
+        //
+        NT_ASSERT(((msr > 0x00001fff) && (msr < 0xc0000000)) ||
+                  ((msr > 0xc0001fff) && (msr < 0xc0010000)) ||
+                   (msr > 0xc0011fff));
+
+        //
+        // Execute WRMSR or RDMSR on behalf of the guest. Important that this
+        // can cause bug check when the guest tries to access unimplemented MSR
+        // *even within the SEH block* because the below WRMSR or RDMSR raises
+        // #GP and are not protected by the SEH block (or cannot be protected
+        // either as this code run outside the thread stack region Windows
+        // requires to proceed SEH). Hypervisors typically handle this by noop-ing
+        // WRMSR and returning zero for RDMSR with non-architecturally defined
+        // MSRs. Alternatively, one can probe which MSRs should cause #GP prior
+        // to installation of a hypervisor and the hypervisor can emulate the
+        // results.
+        //
+        if (writeAccess != FALSE)
+        {
+            value.LowPart = GuestContext->VpRegs->Rax & MAXUINT32;
+            value.HighPart = GuestContext->VpRegs->Rdx & MAXUINT32;
+            __writemsr(msr, value.QuadPart);
+        }
+        else
+        {
+            value.QuadPart = __readmsr(msr);
+            GuestContext->VpRegs->Rax = value.LowPart;
+            GuestContext->VpRegs->Rdx = value.HighPart;
+        }
+    }
 
     //
     // Then, advance RIP to "complete" the instruction.
