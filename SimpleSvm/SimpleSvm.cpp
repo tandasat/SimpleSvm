@@ -24,7 +24,8 @@ _sgdt (
     _Out_ PVOID Descriptor
     );
 
-_IRQL_requires_(DISPATCH_LEVEL)
+_IRQL_requires_max_(DISPATCH_LEVEL)
+_IRQL_requires_min_(PASSIVE_LEVEL)
 _IRQL_requires_same_
 DECLSPEC_NORETURN
 EXTERN_C
@@ -432,7 +433,7 @@ SvFreeContiguousMemory (
 /*!
     @brief          Injects #GP with 0 of error code.
 
-    @param[inout]   VpData - Per processor data.
+    @param[in,out]  VpData - Per processor data.
  */
 _IRQL_requires_same_
 static
@@ -469,8 +470,8 @@ SvInjectGeneralProtectionException (
                     https://msdn.microsoft.com/en-us/library/windows/hardware/Dn613994(v=vs.85).aspx
                     for details of the interface.
 
-    @param[inout]   VpData - Per processor data.
-    @param[inout]   GuestContext - Guest's GPRs.
+    @param[in,out]  VpData - Per processor data.
+    @param[in,out]  GuestContext - Guest's GPRs.
  */
 _IRQL_requires_same_
 static
@@ -530,8 +531,8 @@ SvHandleCpuid (
             {
                 GuestContext->ExitVm = TRUE;
             }
-            break;
         }
+        break;
     default:
         break;
     }
@@ -579,8 +580,8 @@ SvHandleCpuid (
     @details        This protects EFER.SVME from being cleared by the guest by
                     injecting #GP when it is about to be cleared.
 
-    @param[inout]   VpData - Per processor data.
-    @param[inout]   GuestContext - Guest's GPRs.
+    @param[in,out]  VpData - Per processor data.
+    @param[in,out]  GuestContext - Guest's GPRs.
  */
 _IRQL_requires_same_
 static
@@ -635,8 +636,8 @@ SvHandleMsrAccess (
 
     @details        This function always injects #GP to the guest.
 
-    @param[inout]   VpData - Per processor data.
-    @param[inout]   GuestContext - Guest's GPRs.
+    @param[in,out]  VpData - Per processor data.
+    @param[in,out]  GuestContext - Guest's GPRs.
  */
 _IRQL_requires_same_
 static
@@ -666,8 +667,8 @@ SvHandleVmrun (
                     hypervisor, this function loads guest state, disables SVM
                     and returns to execution flow where the #VMEXIT triggered.
 
-    @param[inout]   VpData - Per processor data.
-    @param[inout]   GuestRegisters - Guest's GPRs.
+    @param[in,out]  VpData - Per processor data.
+    @param[in,out]  GuestRegisters - Guest's GPRs.
 
     @result         TRUE when virtualization is terminated; otherwise FALSE.
  */
@@ -902,12 +903,13 @@ SvIsSimpleSvmHypervisorInstalled (
                 processor state, and enters the guest mode on the current
                 processor.
 
-    @param[inout] VpData - The address of per processor data.
-    @param[in]    SharedVpData - The address of share data.
-    @param[in]    ContextRecord - The address of CONETEXT to use as an initial
-                  context of the processor after it is virtualized.
+    @param[in,out]  VpData - The address of per processor data.
+    @param[in]      SharedVpData - The address of share data.
+    @param[in]      ContextRecord - The address of CONETEXT to use as an initial
+                    context of the processor after it is virtualized.
  */
-_IRQL_requires_(DISPATCH_LEVEL)
+_IRQL_requires_max_(DISPATCH_LEVEL)
+_IRQL_requires_min_(PASSIVE_LEVEL)
 _IRQL_requires_same_
 static
 VOID
@@ -1389,7 +1391,7 @@ SvDevirtualizeAllProcessors (
                     IA32_MSR_EFER and sets the MSB bit. For details of logic, see
                     "MSR Intercepts".
 
-    @param[inout]   MsrPermissionsMap - The MSRPM to set up.
+    @param[in,out]  MsrPermissionsMap - The MSRPM to set up.
  */
 _IRQL_requires_same_
 static
