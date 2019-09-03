@@ -7,6 +7,11 @@
 ;
 ; @copyright  Copyright (c) 2017-2019, Satoshi Tanda. All rights reserved.
 ;
+.const
+
+KTRAP_FRAME_SIZE            equ     190h
+MACHINE_FRAME_SIZE          equ     28h
+
 .code
 
 extern SvHandleVmExit : proc
@@ -70,7 +75,7 @@ POPAQ macro
 ;
 ;   @param[in]  HostRsp - A stack pointer for the hypervisor.
 ;
-SvLaunchVm proc
+SvLaunchVm proc frame
         ;
         ; Update the current stack pointer with the host RSP. This protects
         ; values stored on stack for the hypervisor from being overwritten by
@@ -127,6 +132,15 @@ SvLV10: ;
         vmsave rax      ; Save current guest state to VMCB
 
         ;
+        ; Optionally, allocate the trap frame so that Windbg can display stack
+        ; trace of the guest while SvHandleVmExit is being executed. The trap
+        ; frame fields necessary for this are initialized in SvHandleVmExit.
+        ;
+        .pushframe
+        sub     rsp, KTRAP_FRAME_SIZE
+        .allocstack KTRAP_FRAME_SIZE - MACHINE_FRAME_SIZE + 100h
+
+        ;
         ; Also save guest's GPRs since those are not saved anywhere by the
         ; processor on #VMEXIT and will be destroyed by subsequent host code.
         ;
@@ -135,26 +149,30 @@ SvLV10: ;
         ;
         ; Set parameters for SvHandleVmExit. Below is the current stack leyout.
         ; ----
-        ; Rsp          => 0x...f50 R15               ; GUEST_REGISTERS
-        ;                 0x...f58 R14               ;
-        ;                          ...               ;
-        ;                 0x...fc8 RAX               ;
-        ; Rsp + 8 * 16 => 0x...fd0 GuestVmcbPa       ; HostStackLayout
-        ;                 0x...fd8 HostVmcbPa        ;
-        ; Rsp + 8 * 18 => 0x...fe0 Self              ;
-        ;                 0x...fe8 SharedVpData      ;
-        ;                 0x...ff0 Padding1          ;
-        ;                 0x...ff8 Reserved1         ;
+        ; Rsp                             => 0x...dc0 R15               ; GUEST_REGISTERS
+        ;                                    0x...dc8 R14               ;
+        ;                                             ...               ;
+        ;                                    0x...e38 RAX               ;
+        ; Rsp + 8 * 16                    => 0x...e40 TrapFrame         ; HostStackLayout
+        ;                                             ...               ;
+        ; Rsp + 8 * 16 + KTRAP_FRAME_SIZE => 0x...fd0 GuestVmcbPa       ;
+        ;                                    0x...fd8 HostVmcbPa        ;
+        ; Rsp + 8 * 18 + KTRAP_FRAME_SIZE => 0x...fe0 Self              ;
+        ;                                    0x...fe8 SharedVpData      ;
+        ;                                    0x...ff0 Padding1          ;
+        ;                                    0x...ff8 Reserved1         ;
         ; ----
         ;
-        mov rdx, rsp                    ; Rdx <= GuestRegisters
-        mov rcx, [rsp + 8 * 18]         ; Rcx <= VpData
+        mov rdx, rsp                                ; Rdx <= GuestRegisters
+        mov rcx, [rsp + 8 * 18 + KTRAP_FRAME_SIZE]  ; Rcx <= VpData
 
         ;
         ; Allocate stack for homing space (0x20) and volatile XMM registers
         ; (0x60). Save those registers because subsequent host code may destroy
         ; any of those registers. XMM6-15 are not saved because those should be
-        ; preserved (those are non volatile registers).
+        ; preserved (those are non volatile registers). Finally, indicates the
+        ; end of the function prolog as stack pointer changes are all done. This
+        ; is for Windbg to reconstruct stack trace.
         ;
         sub rsp, 80h
         movaps xmmword ptr [rsp + 20h], xmm0
@@ -163,6 +181,7 @@ SvLV10: ;
         movaps xmmword ptr [rsp + 50h], xmm3
         movaps xmmword ptr [rsp + 60h], xmm4
         movaps xmmword ptr [rsp + 70h], xmm5
+        .endprolog
 
         ;
         ; Handle #VMEXIT.
@@ -191,8 +210,9 @@ SvLV10: ;
         ; If non zero value is returned from SvHandleVmExit, this function exits
         ; the loop. Otherwise, continue the loop and resume the guest.
         ;
-        jnz SvLV20      ; if (ExitVm != 0) jmp SvLV20
-        jmp SvLV10      ; else jmp SvLV10
+        jnz SvLV20                  ; if (ExitVm != 0) jmp SvLV20
+        add rsp, KTRAP_FRAME_SIZE   ; else, restore RSP and
+        jmp SvLV10                  ; jmp SvLV10
 
 SvLV20: ;
         ; Virtualization has been terminated. Restore an original (guest's,

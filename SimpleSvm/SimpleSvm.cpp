@@ -188,7 +188,8 @@ typedef struct _VIRTUAL_PROCESSOR_DATA
         DECLSPEC_ALIGN(PAGE_SIZE) UINT8 HostStackLimit[KERNEL_STACK_SIZE];
         struct
         {
-            UINT8 StackContents[KERNEL_STACK_SIZE - sizeof(PVOID) * 6];
+            UINT8 StackContents[KERNEL_STACK_SIZE - (sizeof(PVOID) * 6) - sizeof(KTRAP_FRAME)];
+            KTRAP_FRAME TrapFrame;
             UINT64 GuestVmcbPa;     // HostRsp
             UINT64 HostVmcbPa;
             struct _VIRTUAL_PROCESSOR_DATA* Self;
@@ -741,6 +742,9 @@ SvHandleVmExit (
     GUEST_CONTEXT guestContext;
     KIRQL oldIrql;
 
+    guestContext.VpRegs = GuestRegisters;
+    guestContext.ExitVm = FALSE;
+
     //
     // Load some host state that are not loaded on #VMEXIT.
     //
@@ -770,8 +774,13 @@ SvHandleVmExit (
     //
     GuestRegisters->Rax = VpData->GuestVmcb.StateSaveArea.Rax;
 
-    guestContext.VpRegs = GuestRegisters;
-    guestContext.ExitVm = FALSE;
+    //
+    // Update the _KTRAP_FRAME structure values in hypervisor stack, so that
+    // Windbg can reconstruct call stack of the guest during debug session.
+    // This is optional but very useful thing to do for debugging.
+    //
+    VpData->HostStackLayout.TrapFrame.Rsp = VpData->GuestVmcb.StateSaveArea.Rsp;
+    VpData->HostStackLayout.TrapFrame.Rip = VpData->GuestVmcb.ControlArea.NRip;
 
     //
     // Handle #VMEXIT according with its reason.
