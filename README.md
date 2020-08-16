@@ -25,3 +25,6 @@ Resources
 
 - SimpleVisor
   - http://ionescu007.github.io/SimpleVisor/
+
+- HelloAmdHvPkg
+  - https://github.com/tandasat/HelloAmdHvPkg

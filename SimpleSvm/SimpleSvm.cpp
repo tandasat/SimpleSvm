@@ -5,7 +5,7 @@
 
     @author     Satoshi Tanda
 
-    @copyright  Copyright (c) 2017-2019, Satoshi Tanda. All rights reserved.
+    @copyright  Copyright (c) 2017-2020, Satoshi Tanda. All rights reserved.
  */
 #define POOL_NX_OPTIN   1
 #include "SimpleSvm.hpp"
@@ -505,7 +505,7 @@ SvHandleCpuid (
         // reserved for use by hypervisor to indicate guest status. See "CPUID
         // Fn0000_0001_ECX Feature Identifiers".
         //
-        registers[3] |= CPUID_FN0000_0001_ECX_HYPERVISOR_PRESENT;
+        registers[2] |= CPUID_FN0000_0001_ECX_HYPERVISOR_PRESENT;
         break;
     case CPUID_HV_VENDOR_AND_MAX_FUNCTIONS:
         //
