@@ -637,7 +637,10 @@ SvHandleMsrAccess (
         //
         // This code does not implement the check intentionally, for simplicity.
         //
-        VpData->GuestVmcb.StateSaveArea.Efer = value.QuadPart;
+        else
+        {
+            VpData->GuestVmcb.StateSaveArea.Efer = value.QuadPart;
+        }
     }
     else
     {
