@@ -67,7 +67,7 @@ POPAQ macro
 ;
 ;   @brief      Enters the loop that executes the guest and handles #VMEXIT.
 ;
-;   @details    This function switchs to the host stack pointer, runs the guest
+;   @details    This function switches to the host stack pointer, runs the guest
 ;               and handles #VMEXIT until SvHandleVmExit returns non-zero value.
 ;               When SvHandleVmExit returned non-zero value, this function
 ;               returns execution flow to the next instruction of the
@@ -123,7 +123,7 @@ SvLV10: ;
         vmrun rax       ; Switch to the guest until #VMEXIT
 
         ;
-        ; #VMEXIT occured. Now, some of guest state has been saved to VMCB, but
+        ; #VMEXIT occurred. Now, some of guest state has been saved to VMCB, but
         ; not all of it. Save some of unsaved state with the VMSAVE instruction.
         ;
         ; RAX (and some other state like RSP) has been restored from the host
@@ -147,7 +147,7 @@ SvLV10: ;
         PUSHAQ          ; Stack pointer decreased 8 * 16
 
         ;
-        ; Set parameters for SvHandleVmExit. Below is the current stack leyout.
+        ; Set parameters for SvHandleVmExit. Below is the current stack layout.
         ; ----
         ; Rsp                             => 0x...dc0 R15               ; GUEST_REGISTERS
         ;                                    0x...dc8 R14               ;

@@ -5,7 +5,7 @@ Introduction
 -------------
 
 SimpleSvm is a minimalistic educational hypervisor for Windows on AMD processors.
-It aims to provide small and explanational code to use Secure Virtual Machine (SVM),
+It aims to provide small and explanatory code to use Secure Virtual Machine (SVM),
 the AMD version of Intel VT-x, with Nested Page Tables (NPT) from a windows driver.
 
 SimpleSvm is inspired by SimpleVisor, an Intel x64/EM64T VT-x specific hypervisor
