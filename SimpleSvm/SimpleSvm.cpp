@@ -294,6 +294,8 @@ static PVOID g_PowerCallbackRegistration;
 
     @param[in]  Format - The format string to print.
  */
+#pragma prefast(push)
+#pragma prefast(disable : 26826, "C-style variable arguments needed for DbgPrint.")
 _IRQL_requires_max_(DISPATCH_LEVEL)
 _IRQL_requires_same_
 static
@@ -313,6 +315,7 @@ SvDebugPrint (
                           argList);
     va_end(argList);
 }
+#pragma prefast(pop)
 
 /*!
     @brief      Allocates page aligned, zero filled physical memory.
@@ -348,8 +351,7 @@ SvAllocatePageAlingedPhysicalMemory (
     //
     NT_ASSERT(NumberOfBytes >= PAGE_SIZE);
 
-#pragma prefast(disable : 28118 __WARNING_ERROR, "FP due to POOL_NX_OPTIN.")
-    memory = ExAllocatePoolWithTag(NonPagedPool, NumberOfBytes, 'MVSS');
+    memory = ExAllocatePool2(POOL_FLAG_NON_PAGED, NumberOfBytes, 'MVSS');
     if (memory != nullptr)
     {
         NT_ASSERT(PAGE_ALIGN(memory) == memory);
@@ -405,13 +407,12 @@ SvAllocateContiguousMemory (
     boundary.QuadPart = lowest.QuadPart = 0;
     highest.QuadPart = -1;
 
-#pragma prefast(disable : 30030, "No alternative API on Windows 7.")
-    memory = MmAllocateContiguousMemorySpecifyCacheNode(NumberOfBytes,
-                                                        lowest,
-                                                        highest,
-                                                        boundary,
-                                                        MmCached,
-                                                        MM_ANY_NODE_OK);
+    memory = MmAllocateContiguousNodeMemory(NumberOfBytes,
+                                            lowest,
+                                            highest,
+                                            boundary,
+                                            PAGE_READWRITE,
+                                            MM_ANY_NODE_OK);
     if (memory != nullptr)
     {
         RtlZeroMemory(memory, NumberOfBytes);
@@ -798,7 +799,7 @@ SvHandleVmExit (
         break;
     default:
         SV_DEBUG_BREAK();
-#pragma prefast(disable : __WARNING_USE_OTHER_FUNCTION, "Unrecoverble path.")
+#pragma prefast(suppress : __WARNING_USE_OTHER_FUNCTION, "Unrecoverble path.")
         KeBugCheck(MANUALLY_INITIATED_CRASH);
     }
 
@@ -1150,8 +1151,8 @@ SvVirtualizeProcessor (
     NT_ASSERT(ARGUMENT_PRESENT(Context));
     _Analysis_assume_(ARGUMENT_PRESENT(Context));
 
-    contextRecord = static_cast<PCONTEXT>(ExAllocatePoolWithTag(
-                                                        NonPagedPool,
+    contextRecord = static_cast<PCONTEXT>(ExAllocatePool2(
+                                                        POOL_FLAG_NON_PAGED,
                                                         sizeof(*contextRecord),
                                                         'MVSS'));
     if (contextRecord == nullptr)
@@ -1164,11 +1165,9 @@ SvVirtualizeProcessor (
     //
     // Allocate per processor data.
     //
-#pragma prefast(push)
-#pragma prefast(disable : __WARNING_MEMORY_LEAK, "Ownership is taken on success.")
+#pragma prefast(suppress : __WARNING_MEMORY_LEAK, "Ownership is taken on success.")
     vpData = static_cast<PVIRTUAL_PROCESSOR_DATA>(
             SvAllocatePageAlingedPhysicalMemory(sizeof(VIRTUAL_PROCESSOR_DATA)));
-#pragma prefast(pop)
     if (vpData == nullptr)
     {
         SvDebugPrint("Insufficient memory.\n");
@@ -1218,6 +1217,7 @@ SvVirtualizeProcessor (
         //
         SvLaunchVm(&vpData->HostStackLayout.GuestVmcbPa);
         SV_DEBUG_BREAK();
+#pragma prefast(suppress : __WARNING_USE_OTHER_FUNCTION, "Unrecoverble path.")
         KeBugCheck(MANUALLY_INITIATED_CRASH);
     }
 
@@ -1466,9 +1466,9 @@ SvBuildMsrPermissionsMap (
     _Inout_ PVOID MsrPermissionsMap
     )
 {
-    static const UINT32 BITS_PER_MSR = 2;
-    static const UINT32 SECOND_MSR_RANGE_BASE = 0xc0000000;
-    static const UINT32 SECOND_MSRPM_OFFSET = 0x800 * CHAR_BIT;
+    constexpr UINT32 BITS_PER_MSR = 2;
+    constexpr UINT32 SECOND_MSR_RANGE_BASE = 0xc0000000;
+    constexpr UINT32 SECOND_MSRPM_OFFSET = 0x800 * CHAR_BIT;
     RTL_BITMAP bitmapHeader;
     ULONG offsetFrom2ndBase, offset;
 
@@ -1732,11 +1732,9 @@ SvVirtualizeAllProcessors (
     // Allocate a data structure shared across all processors. This data is
     // page tables used for Nested Page Tables.
     //
-#pragma prefast(push)
-#pragma prefast(disable : __WARNING_MEMORY_LEAK, "Ownership is taken on success.")
+#pragma prefast(suppress : __WARNING_MEMORY_LEAK, "Ownership is taken on success.")
     sharedVpData = static_cast<PSHARED_VIRTUAL_PROCESSOR_DATA>(
         SvAllocatePageAlingedPhysicalMemory(sizeof(SHARED_VIRTUAL_PROCESSOR_DATA)));
-#pragma prefast(pop)
     if (sharedVpData == nullptr)
     {
         SvDebugPrint("Insufficient memory.\n");

@@ -14,7 +14,7 @@ for Windows, written by Alex Ionescu (@aionescu).
 
 Supported Platforms
 ----------------------
-- Windows 10 x64 and Windows 7 x64
+- Windows 10 and later (x64)
 - AMD Processors with SVM and NPT support
 
 
