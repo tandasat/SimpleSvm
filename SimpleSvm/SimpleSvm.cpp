@@ -626,6 +626,7 @@ SvHandleMsrAccess (
             // leads to undefined behavior.
             //
             SvInjectGeneralProtectionException(VpData);
+            return;
         }
 
         //
