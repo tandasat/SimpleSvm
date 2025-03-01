@@ -167,16 +167,17 @@ static_assert(sizeof(SEGMENT_ATTRIBUTE) == 2,
 // SimpleSVM specific structures.
 //
 
-typedef struct _PML4E_TREE {
-    DECLSPEC_ALIGN(PAGE_SIZE) PML4_ENTRY_2MB Pml4Entries;    // for 512 GB
+typedef struct _PML4E_TREE
+{
     DECLSPEC_ALIGN(PAGE_SIZE) PDP_ENTRY_2MB PdpEntries[512];
-    DECLSPEC_ALIGN(PAGE_SIZE) PD_ENTRY_2MB PdeEntries[512][512];
+    DECLSPEC_ALIGN(PAGE_SIZE) PD_ENTRY_2MB PdEntries[512][512];
 } PML4E_TREE, *PPML4E_TREE;
 
 typedef struct _SHARED_VIRTUAL_PROCESSOR_DATA
 {
     PVOID MsrPermissionsMap;
-    DECLSPEC_ALIGN(PAGE_SIZE) PML4E_TREE Pml4Entries[2];    // For 1TB
+    DECLSPEC_ALIGN(PAGE_SIZE) PML4_ENTRY_2MB Pml4Entries[512];
+    DECLSPEC_ALIGN(PAGE_SIZE) PML4E_TREE Pml4eTrees[2];    // For 1TB
 } SHARED_VIRTUAL_PROCESSOR_DATA, *PSHARED_VIRTUAL_PROCESSOR_DATA;
 
 typedef struct _VIRTUAL_PROCESSOR_DATA
@@ -804,7 +805,7 @@ SvHandleVmExit (
         break;
     default:
         SV_DEBUG_BREAK();
-#pragma prefast(suppress : __WARNING_USE_OTHER_FUNCTION, "Unrecoverble path.")
+#pragma prefast(suppress : __WARNING_USE_OTHER_FUNCTION, "Unrecoverable path.")
         KeBugCheck(MANUALLY_INITIATED_CRASH);
     }
 
@@ -969,7 +970,7 @@ SvIsSimpleSvmHypervisorInstalled (
 }
 
 /*!
-    @brief      Virtualize the current processor.
+    @brief      Virtualizes the current processor.
 
     @details    This function enables SVM, initialize VMCB with the current
                 processor state, and enters the guest mode on the current
@@ -1528,35 +1529,34 @@ SvBuildNestedPageTables (
     _Out_ PSHARED_VIRTUAL_PROCESSOR_DATA SharedVpData
     )
 {
-    ULONG64 pdpBasePa, pdeBasePa, translationPa;
+    ULONG64 pdpBasePa, pdBasePa, translationPa;
 
     //
     // Build only two PML4 entries. Those entries have subtables that control up to
-    // 1024GB physical memory. PFN points to a base physical address of the page
+    // 1 TB physical memory. PFN points to a base physical address of the page
     // directory pointer table.
     //
-    for (ULONG64 pml4Index = 0; pml4Index < RTL_NUMBER_OF(SharedVpData->Pml4Entries); pml4Index++) {
-        PPML4E_TREE pml4eTree = &SharedVpData->Pml4Entries[pml4Index];
-        pdpBasePa = MmGetPhysicalAddress(&pml4eTree->PdpEntries).QuadPart;
-        pml4eTree->Pml4Entries.Fields.PageFrameNumber = pdpBasePa >> PAGE_SHIFT;
+    for (ULONG64 pml4Index = 0; pml4Index < 2; pml4Index++) {
+        PPML4_ENTRY_2MB pml4e = &SharedVpData->Pml4Entries[pml4Index];
+        PPML4E_TREE pml4eTree = &SharedVpData->Pml4eTrees[pml4Index];
 
         //
-        // The US (User) bit of all nested page table entries to be translated
+        // Set the US (User) bit of all nested page table entries to be translated
         // without #VMEXIT, as all guest accesses are treated as user accesses at
         // the nested level. Also, the RW (Write) bit of nested page table entries
         // that corresponds to guest page tables must be 1 since all guest page
         // table accesses are threated as write access. See "Nested versus Guest
         // Page Faults, Fault Ordering" for more details.
         //
-        // Nested page tables built here set 1 to those bits for all entries, so
-        // that all translation can complete without triggering #VMEXIT. This does
-        // not lower security since security checks are done twice independently:
-        // based on guest page tables, and nested page tables. See "Nested versus
-        // Guest Page Faults, Fault Ordering" for more details.
+        // Those settings do not lower security since permission checks are done
+        // twice independently: based on guest page tables, and nested page tables.
+        // See "Nested versus Guest Page Faults, Fault Ordering" for more details.
         //
-        pml4eTree->Pml4Entries.Fields.Valid = 1;
-        pml4eTree->Pml4Entries.Fields.Write = 1;
-        pml4eTree->Pml4Entries.Fields.User = 1;
+        pdpBasePa = MmGetPhysicalAddress(&pml4eTree->PdpEntries).QuadPart;
+        pml4e->Fields.PageFrameNumber = pdpBasePa >> PAGE_SHIFT;
+        pml4e->Fields.Valid = 1;
+        pml4e->Fields.Write = 1;
+        pml4e->Fields.User = 1;
 
         //
         // One PML4 entry controls 512 page directory pointer entires.
@@ -1566,8 +1566,8 @@ SvBuildNestedPageTables (
             //
             // PFN points to a base physical address of the page directory table.
             //
-            pdeBasePa = MmGetPhysicalAddress(&pml4eTree->PdeEntries[i][0]).QuadPart;
-            pml4eTree->PdpEntries[i].Fields.PageFrameNumber = pdeBasePa >> PAGE_SHIFT;
+            pdBasePa = MmGetPhysicalAddress(&pml4eTree->PdEntries[i][0]).QuadPart;
+            pml4eTree->PdpEntries[i].Fields.PageFrameNumber = pdBasePa >> PAGE_SHIFT;
             pml4eTree->PdpEntries[i].Fields.Valid = 1;
             pml4eTree->PdpEntries[i].Fields.Write = 1;
             pml4eTree->PdpEntries[i].Fields.User = 1;
@@ -1613,11 +1613,11 @@ SvBuildNestedPageTables (
                 // subtable exists.
                 //
                 translationPa = (i * 512) + j;
-                pml4eTree->PdeEntries[i][j].Fields.PageFrameNumber = translationPa;
-                pml4eTree->PdeEntries[i][j].Fields.Valid = 1;
-                pml4eTree->PdeEntries[i][j].Fields.Write = 1;
-                pml4eTree->PdeEntries[i][j].Fields.User = 1;
-                pml4eTree->PdeEntries[i][j].Fields.LargePage = 1;
+                pml4eTree->PdEntries[i][j].Fields.PageFrameNumber = translationPa;
+                pml4eTree->PdEntries[i][j].Fields.Valid = 1;
+                pml4eTree->PdEntries[i][j].Fields.Write = 1;
+                pml4eTree->PdEntries[i][j].Fields.User = 1;
+                pml4eTree->PdEntries[i][j].Fields.LargePage = 1;
             }
         }
     }
