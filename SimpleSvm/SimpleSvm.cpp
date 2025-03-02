@@ -20,9 +20,9 @@ static CALLBACK_FUNCTION SvPowerCallbackRoutine;
 
 EXTERN_C
 VOID
-_sgdt (
+_sgdt(
     _Out_ PVOID Descriptor
-    );
+);
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
 _IRQL_requires_min_(PASSIVE_LEVEL)
@@ -31,9 +31,9 @@ DECLSPEC_NORETURN
 EXTERN_C
 VOID
 NTAPI
-SvLaunchVm (
+SvLaunchVm(
     _In_ PVOID HostRsp
-    );
+);
 
 //
 // x86-64 defined structures.
@@ -62,10 +62,10 @@ typedef struct _PML4_ENTRY_2MB
             UINT64 NoExecute : 1;           // [63]
         } Fields;
     };
-} PML4_ENTRY_2MB, *PPML4_ENTRY_2MB,
-  PDP_ENTRY_2MB, *PPDP_ENTRY_2MB;
+} PML4_ENTRY_2MB, * PPML4_ENTRY_2MB,
+PDP_ENTRY_2MB, * PPDP_ENTRY_2MB;
 static_assert(sizeof(PML4_ENTRY_2MB) == 8,
-              "PML4_ENTRY_1GB Size Mismatch");
+    "PML4_ENTRY_1GB Size Mismatch");
 
 //
 // See "2-Mbyte PDE-Long Mode".
@@ -94,9 +94,9 @@ typedef struct _PD_ENTRY_2MB
             UINT64 NoExecute : 1;           // [63]
         } Fields;
     };
-} PD_ENTRY_2MB, *PPD_ENTRY_2MB;
+} PD_ENTRY_2MB, * PPD_ENTRY_2MB;
 static_assert(sizeof(PD_ENTRY_2MB) == 8,
-              "PDE_ENTRY_2MB Size Mismatch");
+    "PDE_ENTRY_2MB Size Mismatch");
 
 //
 // See "GDTR and IDTR Format-Long Mode"
@@ -106,9 +106,9 @@ typedef struct _DESCRIPTOR_TABLE_REGISTER
 {
     UINT16 Limit;
     ULONG_PTR Base;
-} DESCRIPTOR_TABLE_REGISTER, *PDESCRIPTOR_TABLE_REGISTER;
+} DESCRIPTOR_TABLE_REGISTER, * PDESCRIPTOR_TABLE_REGISTER;
 static_assert(sizeof(DESCRIPTOR_TABLE_REGISTER) == 10,
-              "DESCRIPTOR_TABLE_REGISTER Size Mismatch");
+    "DESCRIPTOR_TABLE_REGISTER Size Mismatch");
 #include <poppack.h>
 
 //
@@ -137,9 +137,9 @@ typedef struct _SEGMENT_DESCRIPTOR
             UINT32 BaseHigh : 8;    // [56:63]
         } Fields;
     };
-} SEGMENT_DESCRIPTOR, *PSEGMENT_DESCRIPTOR;
+} SEGMENT_DESCRIPTOR, * PSEGMENT_DESCRIPTOR;
 static_assert(sizeof(SEGMENT_DESCRIPTOR) == 8,
-              "SEGMENT_DESCRIPTOR Size Mismatch");
+    "SEGMENT_DESCRIPTOR Size Mismatch");
 
 typedef struct _SEGMENT_ATTRIBUTE
 {
@@ -159,9 +159,9 @@ typedef struct _SEGMENT_ATTRIBUTE
             UINT16 Reserved1 : 4;   // [12:15]
         } Fields;
     };
-} SEGMENT_ATTRIBUTE, *PSEGMENT_ATTRIBUTE;
+} SEGMENT_ATTRIBUTE, * PSEGMENT_ATTRIBUTE;
 static_assert(sizeof(SEGMENT_ATTRIBUTE) == 2,
-              "SEGMENT_ATTRIBUTE Size Mismatch");
+    "SEGMENT_ATTRIBUTE Size Mismatch");
 
 //
 // SimpleSVM specific structures.
@@ -171,14 +171,14 @@ typedef struct _PML4E_TREE
 {
     DECLSPEC_ALIGN(PAGE_SIZE) PDP_ENTRY_2MB PdpEntries[512];
     DECLSPEC_ALIGN(PAGE_SIZE) PD_ENTRY_2MB PdEntries[512][512];
-} PML4E_TREE, *PPML4E_TREE;
+} PML4E_TREE, * PPML4E_TREE;
 
 typedef struct _SHARED_VIRTUAL_PROCESSOR_DATA
 {
     PVOID MsrPermissionsMap;
     DECLSPEC_ALIGN(PAGE_SIZE) PML4_ENTRY_2MB Pml4Entries[512];
     DECLSPEC_ALIGN(PAGE_SIZE) PML4E_TREE Pml4eTrees[2];    // For 1TB
-} SHARED_VIRTUAL_PROCESSOR_DATA, *PSHARED_VIRTUAL_PROCESSOR_DATA;
+} SHARED_VIRTUAL_PROCESSOR_DATA, * PSHARED_VIRTUAL_PROCESSOR_DATA;
 
 typedef struct _VIRTUAL_PROCESSOR_DATA
 {
@@ -207,9 +207,9 @@ typedef struct _VIRTUAL_PROCESSOR_DATA
     DECLSPEC_ALIGN(PAGE_SIZE) VMCB GuestVmcb;
     DECLSPEC_ALIGN(PAGE_SIZE) VMCB HostVmcb;
     DECLSPEC_ALIGN(PAGE_SIZE) UINT8 HostStateArea[PAGE_SIZE];
-} VIRTUAL_PROCESSOR_DATA, *PVIRTUAL_PROCESSOR_DATA;
+} VIRTUAL_PROCESSOR_DATA, * PVIRTUAL_PROCESSOR_DATA;
 static_assert(sizeof(VIRTUAL_PROCESSOR_DATA) == KERNEL_STACK_SIZE + PAGE_SIZE * 3,
-              "VIRTUAL_PROCESSOR_DATA Size Mismatch");
+    "VIRTUAL_PROCESSOR_DATA Size Mismatch");
 
 typedef struct _GUEST_REGISTERS
 {
@@ -229,13 +229,13 @@ typedef struct _GUEST_REGISTERS
     UINT64 Rdx;
     UINT64 Rcx;
     UINT64 Rax;
-} GUEST_REGISTERS, *PGUEST_REGISTERS;
+} GUEST_REGISTERS, * PGUEST_REGISTERS;
 
 typedef struct _GUEST_CONTEXT
 {
     PGUEST_REGISTERS VpRegs;
     BOOLEAN ExitVm;
-} GUEST_CONTEXT, *PGUEST_CONTEXT;
+} GUEST_CONTEXT, * PGUEST_CONTEXT;
 
 
 //
@@ -289,9 +289,9 @@ typedef struct _GUEST_CONTEXT
     } \
     reinterpret_cast<void*>(0)
 
-//
-// A power state callback handle.
-//
+ //
+ // A power state callback handle.
+ //
 static PVOID g_PowerCallbackRegistration;
 
 /*!
@@ -305,19 +305,19 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 _IRQL_requires_same_
 static
 VOID
-SvDebugPrint (
+SvDebugPrint(
     _In_z_ _Printf_format_string_ PCSTR Format,
     ...
-    )
+)
 {
     va_list argList;
 
     va_start(argList, Format);
     vDbgPrintExWithPrefix("[SimpleSvm] ",
-                          DPFLTR_IHVDRIVER_ID,
-                          DPFLTR_ERROR_LEVEL,
-                          Format,
-                          argList);
+        DPFLTR_IHVDRIVER_ID,
+        DPFLTR_ERROR_LEVEL,
+        Format,
+        argList);
     va_end(argList);
 }
 #pragma prefast(pop)
@@ -344,9 +344,9 @@ _IRQL_requires_same_
 _Must_inspect_result_
 static
 PVOID
-SvAllocatePageAlingedPhysicalMemory (
+SvAllocatePageAlingedPhysicalMemory(
     _In_ SIZE_T NumberOfBytes
-    )
+)
 {
     PVOID memory;
 
@@ -375,9 +375,9 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 _IRQL_requires_same_
 static
 VOID
-SvFreePageAlingedPhysicalMemory (
+SvFreePageAlingedPhysicalMemory(
     _Pre_notnull_ __drv_freesMem(Mem) PVOID BaseAddress
-    )
+)
 {
     ExFreePoolWithTag(BaseAddress, 'MVSS');
 }
@@ -402,9 +402,9 @@ _IRQL_requires_same_
 _Must_inspect_result_
 static
 PVOID
-SvAllocateContiguousMemory (
+SvAllocateContiguousMemory(
     _In_ SIZE_T NumberOfBytes
-    )
+)
 {
     PVOID memory;
     PHYSICAL_ADDRESS boundary, lowest, highest;
@@ -413,11 +413,11 @@ SvAllocateContiguousMemory (
     highest.QuadPart = -1;
 
     memory = MmAllocateContiguousNodeMemory(NumberOfBytes,
-                                            lowest,
-                                            highest,
-                                            boundary,
-                                            PAGE_READWRITE,
-                                            MM_ANY_NODE_OK);
+        lowest,
+        highest,
+        boundary,
+        PAGE_READWRITE,
+        MM_ANY_NODE_OK);
     if (memory != nullptr)
     {
         RtlZeroMemory(memory, NumberOfBytes);
@@ -434,9 +434,9 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 _IRQL_requires_same_
 static
 VOID
-SvFreeContiguousMemory (
+SvFreeContiguousMemory(
     _In_ PVOID BaseAddress
-    )
+)
 {
     MmFreeContiguousMemory(BaseAddress);
 }
@@ -449,9 +449,9 @@ SvFreeContiguousMemory (
 _IRQL_requires_same_
 static
 VOID
-SvInjectGeneralProtectionException (
+SvInjectGeneralProtectionException(
     _Inout_ PVIRTUAL_PROCESSOR_DATA VpData
-    )
+)
 {
     EVENTINJ event;
 
@@ -487,10 +487,10 @@ SvInjectGeneralProtectionException (
 _IRQL_requires_same_
 static
 VOID
-SvHandleCpuid (
+SvHandleCpuid(
     _Inout_ PVIRTUAL_PROCESSOR_DATA VpData,
     _Inout_ PGUEST_CONTEXT GuestContext
-    )
+)
 {
     int registers[4];   // EAX, EBX, ECX, and EDX
     int leaf, subLeaf;
@@ -570,12 +570,12 @@ SvHandleCpuid (
     if (KeGetCurrentIrql() <= DISPATCH_LEVEL)
     {
         SvDebugPrint("CPUID: %08x-%08x : %08x %08x %08x %08x\n",
-                     leaf,
-                     subLeaf,
-                     registers[0],
-                     registers[1],
-                     registers[2],
-                     registers[3]);
+            leaf,
+            subLeaf,
+            registers[0],
+            registers[1],
+            registers[2],
+            registers[3]);
     }
 
     //
@@ -598,10 +598,10 @@ SvHandleCpuid (
 _IRQL_requires_same_
 static
 VOID
-SvHandleMsrAccess (
+SvHandleMsrAccess(
     _Inout_ PVIRTUAL_PROCESSOR_DATA VpData,
     _Inout_ PGUEST_CONTEXT GuestContext
-    )
+)
 {
     ULARGE_INTEGER value;
     UINT32 msr;
@@ -661,8 +661,8 @@ SvHandleMsrAccess (
         // permissions map. This can be tested by reading MSR zero, for example.
         //
         NT_ASSERT(((msr > 0x00001fff) && (msr < 0xc0000000)) ||
-                  ((msr > 0xc0001fff) && (msr < 0xc0010000)) ||
-                   (msr > 0xc0011fff));
+            ((msr > 0xc0001fff) && (msr < 0xc0010000)) ||
+            (msr > 0xc0011fff));
 
         //
         // Execute WRMSR or RDMSR on behalf of the guest. Important that this
@@ -707,10 +707,10 @@ SvHandleMsrAccess (
 _IRQL_requires_same_
 static
 VOID
-SvHandleVmrun (
+SvHandleVmrun(
     _Inout_ PVIRTUAL_PROCESSOR_DATA VpData,
     _Inout_ PGUEST_CONTEXT GuestContext
-    )
+)
 {
     UNREFERENCED_PARAMETER(GuestContext);
 
@@ -741,10 +741,10 @@ _IRQL_requires_same_
 EXTERN_C
 BOOLEAN
 NTAPI
-SvHandleVmExit (
+SvHandleVmExit(
     _Inout_ PVIRTUAL_PROCESSOR_DATA VpData,
     _Inout_ PGUEST_REGISTERS GuestRegisters
-    )
+)
 {
     GUEST_CONTEXT guestContext;
     KIRQL oldIrql;
@@ -802,6 +802,14 @@ SvHandleVmExit (
         break;
     case VMEXIT_VMRUN:
         SvHandleVmrun(VpData, &guestContext);
+        break;
+    case VMEXIT_NPF:
+        // 输出嵌套页面错误信息以便调试
+        SvDebugPrint("Nested Page Fault occurred: GPA=0x%llx, EC=0x%llx\n",
+            VpData->GuestVmcb.ControlArea.ExitInfo2,
+            VpData->GuestVmcb.ControlArea.ExitInfo1);
+        // 注入#GP到客户端以避免无限循环
+        SvInjectGeneralProtectionException(VpData);
         break;
     default:
         SV_DEBUG_BREAK();
@@ -897,10 +905,10 @@ _IRQL_requires_same_
 _Check_return_
 static
 UINT16
-SvGetSegmentAccessRight (
+SvGetSegmentAccessRight(
     _In_ UINT16 SegmentSelector,
     _In_ ULONG_PTR GdtBase
-    )
+)
 {
     PSEGMENT_DESCRIPTOR descriptor;
     SEGMENT_ATTRIBUTE attribute;
@@ -909,7 +917,7 @@ SvGetSegmentAccessRight (
     // Get a segment descriptor corresponds to the specified segment selector.
     //
     descriptor = reinterpret_cast<PSEGMENT_DESCRIPTOR>(
-                                        GdtBase + (SegmentSelector & ~RPL_MASK));
+        GdtBase + (SegmentSelector & ~RPL_MASK));
 
     //
     // Extract all attribute fields in the segment descriptor to a structure
@@ -949,9 +957,9 @@ _IRQL_requires_same_
 _Check_return_
 static
 BOOLEAN
-SvIsSimpleSvmHypervisorInstalled (
+SvIsSimpleSvmHypervisorInstalled(
     VOID
-    )
+)
 {
     int registers[4];   // EAX, EBX, ECX, and EDX
     char vendorId[13];
@@ -986,11 +994,11 @@ _IRQL_requires_min_(PASSIVE_LEVEL)
 _IRQL_requires_same_
 static
 VOID
-SvPrepareForVirtualization (
+SvPrepareForVirtualization(
     _Inout_ PVIRTUAL_PROCESSOR_DATA VpData,
     _In_ PSHARED_VIRTUAL_PROCESSOR_DATA SharedVpData,
     _In_ const CONTEXT* ContextRecord
-    )
+)
 {
     DESCRIPTOR_TABLE_REGISTER gdtr, idtr;
     PHYSICAL_ADDRESS guestVmcbPa, hostVmcbPa, hostStateAreaPa, pml4BasePa, msrpmPa;
@@ -1141,9 +1149,9 @@ _IRQL_requires_same_
 _Check_return_
 static
 NTSTATUS
-SvVirtualizeProcessor (
+SvVirtualizeProcessor(
     _In_opt_ PVOID Context
-    )
+)
 {
     NTSTATUS status;
     PSHARED_VIRTUAL_PROCESSOR_DATA sharedVpData;
@@ -1158,9 +1166,9 @@ SvVirtualizeProcessor (
     _Analysis_assume_(ARGUMENT_PRESENT(Context));
 
     contextRecord = static_cast<PCONTEXT>(ExAllocatePool2(
-                                                        POOL_FLAG_NON_PAGED,
-                                                        sizeof(*contextRecord),
-                                                        'MVSS'));
+        POOL_FLAG_NON_PAGED,
+        sizeof(*contextRecord),
+        'MVSS'));
     if (contextRecord == nullptr)
     {
         SvDebugPrint("Insufficient memory.\n");
@@ -1173,7 +1181,7 @@ SvVirtualizeProcessor (
     //
 #pragma prefast(suppress : __WARNING_MEMORY_LEAK, "Ownership is taken on success.")
     vpData = static_cast<PVIRTUAL_PROCESSOR_DATA>(
-            SvAllocatePageAlingedPhysicalMemory(sizeof(VIRTUAL_PROCESSOR_DATA)));
+        SvAllocatePageAlingedPhysicalMemory(sizeof(VIRTUAL_PROCESSOR_DATA)));
     if (vpData == nullptr)
     {
         SvDebugPrint("Insufficient memory.\n");
@@ -1272,11 +1280,11 @@ _IRQL_requires_same_
 _Check_return_
 static
 NTSTATUS
-SvExecuteOnEachProcessor (
-    _In_ NTSTATUS (*Callback)(PVOID),
+SvExecuteOnEachProcessor(
+    _In_ NTSTATUS(*Callback)(PVOID),
     _In_opt_ PVOID Context,
     _Out_opt_ PULONG NumOfProcessorCompleted
-    )
+)
 {
     NTSTATUS status;
     ULONG i, numOfProcessors;
@@ -1364,9 +1372,9 @@ _IRQL_requires_same_
 _Check_return_
 static
 NTSTATUS
-SvDevirtualizeProcessor (
+SvDevirtualizeProcessor(
     _In_opt_ PVOID Context
-    )
+)
 {
     int registers[4];   // EAX, EBX, ECX, and EDX
     UINT64 high, low;
@@ -1422,9 +1430,9 @@ _IRQL_requires_min_(PASSIVE_LEVEL)
 _IRQL_requires_same_
 static
 VOID
-SvDevirtualizeAllProcessors (
+SvDevirtualizeAllProcessors(
     VOID
-    )
+)
 {
     PSHARED_VIRTUAL_PROCESSOR_DATA sharedVpData;
 
@@ -1434,8 +1442,8 @@ SvDevirtualizeAllProcessors (
     // De-virtualize all processors and free shared data when returned.
     //
     NT_VERIFY(NT_SUCCESS(SvExecuteOnEachProcessor(SvDevirtualizeProcessor,
-                                                  &sharedVpData,
-                                                  nullptr)));
+        &sharedVpData,
+        nullptr)));
     if (sharedVpData != nullptr)
     {
         SvFreeContiguousMemory(sharedVpData->MsrPermissionsMap);
@@ -1468,9 +1476,9 @@ SvDevirtualizeAllProcessors (
 _IRQL_requires_same_
 static
 VOID
-SvBuildMsrPermissionsMap (
+SvBuildMsrPermissionsMap(
     _Inout_ PVOID MsrPermissionsMap
-    )
+)
 {
     constexpr UINT32 BITS_PER_MSR = 2;
     constexpr UINT32 SECOND_MSR_RANGE_BASE = 0xc0000000;
@@ -1482,9 +1490,9 @@ SvBuildMsrPermissionsMap (
     // Setup and clear all bits, indicating no MSR access should be intercepted.
     //
     RtlInitializeBitMap(&bitmapHeader,
-                        static_cast<PULONG>(MsrPermissionsMap),
-                        SVM_MSR_PERMISSIONS_MAP_SIZE * CHAR_BIT
-                        );
+        static_cast<PULONG>(MsrPermissionsMap),
+        SVM_MSR_PERMISSIONS_MAP_SIZE * CHAR_BIT
+    );
     RtlClearAllBits(&bitmapHeader);
 
     //
@@ -1525,9 +1533,9 @@ SvBuildMsrPermissionsMap (
 _IRQL_requires_same_
 static
 VOID
-SvBuildNestedPageTables (
+SvBuildNestedPageTables(
     _Out_ PSHARED_VIRTUAL_PROCESSOR_DATA SharedVpData
-    )
+)
 {
     ULONG64 pdpBasePa, pdBasePa, translationPa;
 
@@ -1553,6 +1561,7 @@ SvBuildNestedPageTables (
         // See "Nested versus Guest Page Faults, Fault Ordering" for more details.
         //
         pdpBasePa = MmGetPhysicalAddress(&pml4eTree->PdpEntries).QuadPart;
+        pml4e->AsUInt64 = 0;
         pml4e->Fields.PageFrameNumber = pdpBasePa >> PAGE_SHIFT;
         pml4e->Fields.Valid = 1;
         pml4e->Fields.Write = 1;
@@ -1567,6 +1576,7 @@ SvBuildNestedPageTables (
             // PFN points to a base physical address of the page directory table.
             //
             pdBasePa = MmGetPhysicalAddress(&pml4eTree->PdEntries[i][0]).QuadPart;
+            pml4eTree->PdpEntries[i].AsUInt64 = 0;
             pml4eTree->PdpEntries[i].Fields.PageFrameNumber = pdBasePa >> PAGE_SHIFT;
             pml4eTree->PdpEntries[i].Fields.Valid = 1;
             pml4eTree->PdpEntries[i].Fields.Write = 1;
@@ -1612,7 +1622,8 @@ SvBuildNestedPageTables (
                 // (LargePage) bit to indicate that this is a large page and no
                 // subtable exists.
                 //
-                translationPa = (i * 512) + j;
+
+                translationPa = (pml4Index * 512 + i) * 512 + j;
                 pml4eTree->PdEntries[i][j].Fields.PageFrameNumber = translationPa;
                 pml4eTree->PdEntries[i][j].Fields.Valid = 1;
                 pml4eTree->PdEntries[i][j].Fields.Write = 1;
@@ -1635,9 +1646,9 @@ _IRQL_requires_same_
 _Check_return_
 static
 BOOLEAN
-SvIsSvmSupported (
+SvIsSvmSupported(
     VOID
-    )
+)
 {
     BOOLEAN svmSupported;
     int registers[4];   // EAX, EBX, ECX, and EDX
@@ -1714,9 +1725,9 @@ _IRQL_requires_same_
 _Check_return_
 static
 NTSTATUS
-SvVirtualizeAllProcessors (
+SvVirtualizeAllProcessors(
     VOID
-    )
+)
 {
     NTSTATUS status;
     PSHARED_VIRTUAL_PROCESSOR_DATA sharedVpData;
@@ -1754,7 +1765,7 @@ SvVirtualizeAllProcessors (
     // Allocate MSR permissions map (MSRPM) onto contiguous physical memory.
     //
     sharedVpData->MsrPermissionsMap = SvAllocateContiguousMemory(
-                                                    SVM_MSR_PERMISSIONS_MAP_SIZE);
+        SVM_MSR_PERMISSIONS_MAP_SIZE);
     if (sharedVpData->MsrPermissionsMap == nullptr)
     {
         SvDebugPrint("Insufficient memory.\n");
@@ -1781,8 +1792,8 @@ SvVirtualizeAllProcessors (
     // processors.
     //
     status = SvExecuteOnEachProcessor(SvVirtualizeProcessor,
-                                      sharedVpData,
-                                      &numOfProcessorsCompleted);
+        sharedVpData,
+        &numOfProcessorsCompleted);
 
 Exit:
     if (!NT_SUCCESS(status))
@@ -1829,10 +1840,10 @@ Exit:
 _Use_decl_annotations_
 EXTERN_C
 NTSTATUS
-DriverEntry (
+DriverEntry(
     PDRIVER_OBJECT DriverObject,
     PUNICODE_STRING RegistryPath
-    )
+)
 {
     NTSTATUS status;
     UNICODE_STRING objectName;
@@ -1870,7 +1881,7 @@ DriverEntry (
     //
     objectName = RTL_CONSTANT_STRING(L"\\Callback\\PowerState");
     objectAttributes = RTL_CONSTANT_OBJECT_ATTRIBUTES(&objectName,
-                                                      OBJ_CASE_INSENSITIVE);
+        OBJ_CASE_INSENSITIVE);
     status = ExCreateCallback(&callbackObject, &objectAttributes, FALSE, TRUE);
     if (!NT_SUCCESS(status))
     {
@@ -1883,8 +1894,8 @@ DriverEntry (
     // dereferenced.
     //
     callbackRegistration = ExRegisterCallback(callbackObject,
-                                              SvPowerCallbackRoutine,
-                                              nullptr);
+        SvPowerCallbackRoutine,
+        nullptr);
     ObDereferenceObject(callbackObject);
     if (callbackRegistration == nullptr)
     {
@@ -1930,9 +1941,9 @@ Exit:
 _Use_decl_annotations_
 static
 VOID
-SvDriverUnload (
+SvDriverUnload(
     PDRIVER_OBJECT DriverObject
-    )
+)
 {
     UNREFERENCED_PARAMETER(DriverObject);
 
@@ -1970,11 +1981,11 @@ SvDriverUnload (
 _Use_decl_annotations_
 static
 VOID
-SvPowerCallbackRoutine (
+SvPowerCallbackRoutine(
     PVOID CallbackContext,
     PVOID Argument1,
     PVOID Argument2
-    )
+)
 {
     UNREFERENCED_PARAMETER(CallbackContext);
 
